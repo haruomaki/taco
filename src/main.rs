@@ -2,25 +2,27 @@
 
 use taco::*;
 
+use serde_json::{Number, Value};
+
 fn main() -> taco::Result<()> {
     let webview = WebView::create(None, true)?;
 
-    // // Bind a quick and dirty calculator callback.
-    // webview.bind("hostCallback", move |request| {
-    //     if let [Value::String(str), Value::Number(a), Value::Number(b)] = &request[..] {
-    //         if str == "Add" {
-    //             let result = a.as_f64().unwrap_or(0f64) + b.as_f64().unwrap_or(0f64);
-    //             let result = Number::from_f64(result);
-    //             if let Some(result) = result {
-    //                 return Ok(Value::Number(result));
-    //             }
-    //         }
-    //     }
+    // Bind a quick and dirty calculator callback.
+    webview.bind("hostCallback", move |request| {
+        if let [Value::String(str), Value::Number(a), Value::Number(b)] = &request[..] {
+            if str == "Add" {
+                let result = a.as_f64().unwrap_or(0f64) + b.as_f64().unwrap_or(0f64);
+                let result = Number::from_f64(result);
+                if let Some(result) = result {
+                    return Ok(Value::Number(result));
+                }
+            }
+        }
 
-    //     Err(Error::WebView2Error(webview2_com::Error::CallbackError(
-    //         String::from(r#"Usage: window.hostCallback("Add", a, b)"#),
-    //     )))
-    // })?;
+        Err(Error::WebView2Error(webview2_com::Error::CallbackError(
+            String::from(r#"Usage: window.hostCallback("Add", a, b)"#),
+        )))
+    })?;
 
     // Configure the target URL and add an init script to trigger the calculator callback.
     webview

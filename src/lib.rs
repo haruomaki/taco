@@ -20,7 +20,7 @@ use std::{
 };
 
 use serde::Deserialize;
-use serde_json::{Number, Value};
+use serde_json::Value;
 use windows::{
     core::*,
     Win32::{
@@ -275,42 +275,42 @@ impl WebView {
             url: Arc::new(Mutex::new(String::new())),
         };
 
-        // // Inject the invoke handler.
-        // webview
-        //     .init(r#"window.external = { invoke: s => window.chrome.webview.postMessage(s) };"#)?;
+        // Inject the invoke handler.
+        webview
+            .init(r#"window.external = { invoke: s => window.chrome.webview.postMessage(s) };"#)?;
 
-        // let bindings = webview.bindings.clone();
-        // let bound = webview.clone();
-        // unsafe {
-        //     let mut _token = EventRegistrationToken::default();
-        //     webview.webview.WebMessageReceived(
-        //         WebMessageReceivedEventHandler::create(Box::new(move |_webview, args| {
-        //             if let Some(args) = args {
-        //                 let mut message = PWSTR::default();
-        //                 if args.WebMessageAsJson(&mut message).is_ok() {
-        //                     let message = take_pwstr(message);
-        //                     if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
-        //                         if let Ok(mut bindings) = bindings.try_lock() {
-        //                             if let Some(f) = bindings.get_mut(&value.method) {
-        //                                 match (*f)(value.params) {
-        //                                     Ok(result) => bound.resolve(value.id, 0, result),
-        //                                     Err(err) => bound.resolve(
-        //                                         value.id,
-        //                                         1,
-        //                                         Value::String(format!("{:#?}", err)),
-        //                                     ),
-        //                                 }
-        //                                 .unwrap();
-        //                             }
-        //                         }
-        //                     }
-        //                 }
-        //             }
-        //             Ok(())
-        //         })),
-        //         &mut _token,
-        //     )?;
-        // }
+        let bindings = webview.bindings.clone();
+        let bound = webview.clone();
+        unsafe {
+            let mut _token = EventRegistrationToken::default();
+            webview.webview.WebMessageReceived(
+                WebMessageReceivedEventHandler::create(Box::new(move |_webview, args| {
+                    if let Some(args) = args {
+                        let mut message = PWSTR::default();
+                        if args.WebMessageAsJson(&mut message).is_ok() {
+                            let message = take_pwstr(message);
+                            if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
+                                if let Ok(mut bindings) = bindings.try_lock() {
+                                    if let Some(f) = bindings.get_mut(&value.method) {
+                                        match (*f)(value.params) {
+                                            Ok(result) => bound.resolve(value.id, 0, result),
+                                            Err(err) => bound.resolve(
+                                                value.id,
+                                                1,
+                                                Value::String(format!("{:#?}", err)),
+                                            ),
+                                        }
+                                        .unwrap();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut _token,
+            )?;
+        }
 
         if webview.frame.is_some() {
             WebView::set_window_webview(parent, Some(Box::new(webview.clone())));
