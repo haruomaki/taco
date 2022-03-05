@@ -21,7 +21,7 @@ use windows::{
         UI::{
             HiDpi,
             Input::KeyboardAndMouse,
-            WindowsAndMessaging::{self, MSG, WINDOW_LONG_PTR_INDEX, WNDCLASSA},
+            WindowsAndMessaging::{self, PostQuitMessage, MSG, WINDOW_LONG_PTR_INDEX, WNDCLASSA},
         },
     },
 };
@@ -136,8 +136,6 @@ impl FrameWindow {
 
 struct WebViewController(ICoreWebView2Controller);
 
-type WebViewSender = mpsc::Sender<Box<dyn FnOnce(WebView) + Send>>;
-type WebViewReceiver = mpsc::Receiver<Box<dyn FnOnce(WebView) + Send>>;
 type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
@@ -145,13 +143,10 @@ type BindingsMap = HashMap<String, BindingCallback>;
 pub struct WebView {
     controller: Arc<WebViewController>,
     webview: Arc<ICoreWebView2>,
-    tx: WebViewSender,
-    rx: Arc<WebViewReceiver>,
     thread_id: u32,
     bindings: Arc<Mutex<BindingsMap>>,
     frame: Option<FrameWindow>,
     parent: Arc<HWND>,
-    url: Arc<Mutex<String>>,
 }
 
 impl Drop for WebViewController {
@@ -250,20 +245,15 @@ impl WebView {
             *frame.size.lock()? = size;
         }
 
-        let (tx, rx) = mpsc::channel();
-        let rx = Arc::new(rx);
         let thread_id = unsafe { Threading::GetCurrentThreadId() };
 
         let webview = WebView {
             controller: Arc::new(WebViewController(controller)),
             webview: Arc::new(webview),
-            tx,
-            rx,
             thread_id,
             bindings: Arc::new(Mutex::new(HashMap::new())),
             frame,
             parent: Arc::new(parent),
-            url: Arc::new(Mutex::new(String::new())),
         };
 
         // Inject the invoke handler.
@@ -271,7 +261,6 @@ impl WebView {
             .init(r#"window.external = { invoke: s => window.chrome.webview.postMessage(s) };"#)?;
 
         let bindings = webview.bindings.clone();
-        let bound = webview.clone();
         unsafe {
             let mut _token = EventRegistrationToken::default();
             webview.webview.WebMessageReceived(
@@ -284,14 +273,9 @@ impl WebView {
                                 if let Ok(mut bindings) = bindings.try_lock() {
                                     if let Some(f) = bindings.get_mut(&value.method) {
                                         match (*f)(value.params) {
-                                            Ok(result) => bound.resolve(value.id, 0, result),
-                                            Err(err) => bound.resolve(
-                                                value.id,
-                                                1,
-                                                Value::String(format!("{:#?}", err)),
-                                            ),
+                                            Ok(result) => println!("ok! {:?}", result),
+                                            Err(err) => println!("err! {:?}", err),
                                         }
-                                        .unwrap();
                                     }
                                 }
                             }
@@ -311,26 +295,6 @@ impl WebView {
     }
 
     pub fn run(self) -> Result<()> {
-        let webview = self.webview.as_ref();
-        let url = self.url.try_lock()?.clone();
-        let (tx, rx) = mpsc::channel();
-
-        if !url.is_empty() {
-            let handler =
-                NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-                    tx.send(()).expect("send over mpsc channel");
-                    Ok(())
-                }));
-            let mut token = EventRegistrationToken::default();
-            unsafe {
-                webview.NavigationCompleted(handler, &mut token)?;
-                webview.Navigate(url)?;
-                let result = webview2_com::wait_with_pump(rx);
-                webview.RemoveNavigationCompleted(token)?;
-                result?;
-            }
-        }
-
         if let Some(frame) = self.frame.as_ref() {
             let hwnd = *frame.window;
             unsafe {
@@ -344,10 +308,6 @@ impl WebView {
         let h_wnd = HWND::default();
 
         loop {
-            while let Ok(f) = self.rx.try_recv() {
-                (f)(self.clone());
-            }
-
             unsafe {
                 let result = WindowsAndMessaging::GetMessageA(&mut msg, h_wnd, 0, 0).0;
 
@@ -364,18 +324,6 @@ impl WebView {
                 }
             }
         }
-    }
-
-    pub fn terminate(self) -> Result<()> {
-        self.dispatch(|_webview| unsafe {
-            WindowsAndMessaging::PostQuitMessage(0);
-        })?;
-
-        if self.frame.is_some() {
-            WebView::set_window_webview(self.get_window(), None);
-        }
-
-        Ok(())
     }
 
     pub fn set_title(&self, title: &str) -> Result<&Self> {
@@ -421,12 +369,6 @@ impl WebView {
         *self.parent
     }
 
-    pub fn navigate(&self, url: &str) -> Result<&Self> {
-        let url = url.into();
-        *self.url.lock().expect("lock url") = url;
-        Ok(self)
-    }
-
     pub fn init(&self, js: &str) -> Result<&Self> {
         let webview = self.webview.clone();
         let js = String::from(js);
@@ -452,23 +394,6 @@ impl WebView {
             }),
             Box::new(|error_code, _result| error_code),
         )?;
-        Ok(self)
-    }
-
-    pub fn dispatch<F>(&self, f: F) -> Result<&Self>
-    where
-        F: FnOnce(WebView) + Send + 'static,
-    {
-        self.tx.send(Box::new(f)).expect("send the fn");
-
-        unsafe {
-            WindowsAndMessaging::PostThreadMessageA(
-                self.thread_id,
-                WindowsAndMessaging::WM_APP,
-                WPARAM::default(),
-                LPARAM::default(),
-            );
-        }
         Ok(self)
     }
 
@@ -505,25 +430,6 @@ impl WebView {
             })()"#;
 
         self.init(&js)
-    }
-
-    pub fn resolve(&self, id: u64, status: i32, result: Value) -> Result<&Self> {
-        let result = result.to_string();
-
-        self.dispatch(move |webview| {
-            let method = match status {
-                0 => "resolve",
-                _ => "reject",
-            };
-            let js = format!(
-                r#"
-                window._rpc[{}].{}({});
-                window._rpc[{}] = undefined;"#,
-                id, method, result, id
-            );
-
-            webview.eval(&js).expect("eval return script");
-        })
     }
 
     fn set_window_webview(hwnd: HWND, webview: Option<Box<WebView>>) -> Option<Box<WebView>> {
@@ -604,7 +510,8 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
         }
 
         WindowsAndMessaging::WM_DESTROY => {
-            webview.terminate().expect("window is gone");
+            // webview.terminate().expect("window is gone");
+            unsafe { PostQuitMessage(0) };
             LRESULT::default()
         }
 
@@ -644,3 +551,27 @@ unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
 unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
     WindowsAndMessaging::GetWindowLongPtrA(window, index)
 }
+
+// pub fn my_navigate(webview: &WebView, url: String) {
+//     webview
+//         .dispatch(|slf| {
+//             let webview = slf.webview.as_ref();
+//             // let url = slf.url.try_lock()?.clone();
+//             let (tx, rx) = mpsc::channel();
+
+//             let handler =
+//                 NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
+//                     tx.send(()).expect("send over mpsc channel");
+//                     Ok(())
+//                 }));
+//             let mut token = EventRegistrationToken::default();
+//             unsafe {
+//                 webview.NavigationCompleted(handler, &mut token).unwrap();
+//                 webview.Navigate(url).unwrap();
+//                 let result = webview2_com::wait_with_pump(rx);
+//                 webview.RemoveNavigationCompleted(token).unwrap();
+//                 result.unwrap();
+//             }
+//         })
+//         .unwrap();
+// }
