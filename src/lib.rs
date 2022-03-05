@@ -142,7 +142,7 @@ type BindingsMap = HashMap<String, BindingCallback>;
 #[derive(Clone)]
 pub struct WebView {
     controller: Arc<WebViewController>,
-    webview: Arc<ICoreWebView2>,
+    pub webview: Arc<ICoreWebView2>,
     thread_id: u32,
     bindings: Arc<Mutex<BindingsMap>>,
     frame: Option<FrameWindow>,
@@ -315,7 +315,6 @@ impl WebView {
                     -1 => break Err(windows::core::Error::from_win32().into()),
                     0 => break Ok(()),
                     _ => match msg.message {
-                        WindowsAndMessaging::WM_APP => (),
                         _ => {
                             WindowsAndMessaging::TranslateMessage(&msg);
                             WindowsAndMessaging::DispatchMessageA(&msg);
@@ -484,6 +483,16 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
         .expect("should only be called for owned windows");
 
     match msg {
+        WindowsAndMessaging::WM_APP => {
+            println!("WM_APPを受け取ったお");
+            let p = l_param.0 as *mut Box<dyn FnOnce(&WebView)>;
+            unsafe {
+                let fbb = Box::from_raw(p);
+                (*fbb)(webview.as_ref());
+            }
+            LRESULT::default()
+        }
+
         WindowsAndMessaging::WM_SIZE => {
             let size = get_window_size(hwnd);
             unsafe {
@@ -552,26 +561,41 @@ unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
     WindowsAndMessaging::GetWindowLongPtrA(window, index)
 }
 
-// pub fn my_navigate(webview: &WebView, url: String) {
-//     webview
-//         .dispatch(|slf| {
-//             let webview = slf.webview.as_ref();
-//             // let url = slf.url.try_lock()?.clone();
-//             let (tx, rx) = mpsc::channel();
+pub fn dispatch<F>(hwnd: HWND, f: F)
+where
+    F: FnOnce(&WebView),
+    // pub fn my_dispatch(hwnd: HWND, f: dyn FnOnce(&WebView))
+{
+    let fb = Box::new(f) as Box<dyn FnOnce(&WebView)>;
+    let fbb = Box::new(fb);
+    let p = Box::into_raw(fbb);
+    unsafe {
+        WindowsAndMessaging::PostMessageA(
+            hwnd,
+            WindowsAndMessaging::WM_APP,
+            WPARAM(0),
+            LPARAM(p as _),
+        )
+    };
+}
 
-//             let handler =
-//                 NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-//                     tx.send(()).expect("send over mpsc channel");
-//                     Ok(())
-//                 }));
-//             let mut token = EventRegistrationToken::default();
-//             unsafe {
-//                 webview.NavigationCompleted(handler, &mut token).unwrap();
-//                 webview.Navigate(url).unwrap();
-//                 let result = webview2_com::wait_with_pump(rx);
-//                 webview.RemoveNavigationCompleted(token).unwrap();
-//                 result.unwrap();
-//             }
-//         })
-//         .unwrap();
-// }
+pub fn navigate(hwnd: HWND, url: String) {
+    dispatch(hwnd, |slf| {
+        let webview = slf.webview.as_ref();
+        // let url = slf.url.try_lock()?.clone();
+        let (tx, rx) = mpsc::channel();
+
+        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
+            tx.send(()).expect("send over mpsc channel");
+            Ok(())
+        }));
+        let mut token = EventRegistrationToken::default();
+        unsafe {
+            webview.NavigationCompleted(handler, &mut token).unwrap();
+            webview.Navigate(url).unwrap();
+            let result = webview2_com::wait_with_pump(rx);
+            webview.RemoveNavigationCompleted(token).unwrap();
+            result.unwrap();
+        }
+    });
+}

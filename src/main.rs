@@ -37,20 +37,20 @@ fn main() -> taco::Result<()> {
     //     // .navigate("https://github.com/wravery/webview2-rs")?;
     //     .navigate("C:\\Users\\haruo\\projects\\taco\\web\\main.html")?;
 
-    // let x = webview.webview.clone();
-    // spawn(move || loop {
-    //     sleep(Duration::from_millis(1000));
-    //     unsafe {
-    //         let mut x = taco::windows::Win32::Foundation::BOOL::default();
-    //         webview.webview.CanGoBack(&mut x).unwrap();
-    //         println!("can go back? {:?}", x);
-    //     }
-    // });
+    let hwnd = webview.get_window();
+    spawn(move || loop {
+        sleep(Duration::from_millis(1000));
+        taco::dispatch(hwnd, |webview| unsafe {
+            let mut x = false.into();
+            webview.webview.CanGoBack(&mut x).unwrap();
+            println!("{:?}", x);
+        });
+    });
 
-    // taco::my_navigate(
-    //     &webview,
-    //     String::from("C:\\Users\\haruo\\projects\\taco\\web\\main.html"),
-    // );
+    taco::navigate(
+        hwnd,
+        String::from("C:\\Users\\haruo\\projects\\taco\\web\\main.html"),
+    );
 
     // Off we go....
     webview.run()
