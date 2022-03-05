@@ -1,8 +1,7 @@
 #![windows_subsystem = "windows"]
 
-use taco::*;
-
-use serde_json::{Number, Value};
+use taco::serde_json::{Number, Value};
+use taco::WebView;
 
 fn main() -> taco::Result<()> {
     let webview = WebView::create(None, true)?;
@@ -19,9 +18,11 @@ fn main() -> taco::Result<()> {
             }
         }
 
-        Err(Error::WebView2Error(webview2_com::Error::CallbackError(
-            String::from(r#"Usage: window.hostCallback("Add", a, b)"#),
-        )))
+        Err(taco::Error::WebView2Error(
+            webview2_com::Error::CallbackError(String::from(
+                r#"Usage: window.hostCallback("Add", a, b)"#,
+            )),
+        ))
     })?;
 
     // Configure the target URL and add an init script to trigger the calculator callback.
@@ -30,7 +31,8 @@ fn main() -> taco::Result<()> {
         .init(
             r#"window.hostCallback("Add", 2, 6).then(result => console.log(`Result: ${result}`));"#,
         )?
-        .navigate("https://github.com/wravery/webview2-rs")?;
+        // .navigate("https://github.com/wravery/webview2-rs")?;
+        .navigate("C:\\Users\\haruo\\projects\\taco\\web\\main.html")?;
 
     // Off we go....
     webview.run()

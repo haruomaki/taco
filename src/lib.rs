@@ -1,16 +1,7 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
-
-extern crate serde;
-extern crate serde_json;
-extern crate webview2_com;
-extern crate windows;
+pub extern crate serde;
+pub extern crate serde_json;
+pub extern crate webview2_com;
+pub extern crate windows;
 
 use std::{
     collections::HashMap,
@@ -570,7 +561,7 @@ impl WebView {
     }
 }
 
-pub fn set_process_dpi_awareness() -> Result<()> {
+fn set_process_dpi_awareness() -> Result<()> {
     unsafe { HiDpi::SetProcessDpiAwareness(HiDpi::PROCESS_PER_MONITOR_DPI_AWARE)? };
     Ok(())
 }
@@ -632,24 +623,24 @@ fn get_window_size(hwnd: HWND) -> SIZE {
 
 #[allow(non_snake_case)]
 #[cfg(target_pointer_width = "32")]
-pub unsafe fn SetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+unsafe fn SetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
     WindowsAndMessaging::SetWindowLongA(window, index, value as _) as _
 }
 
 #[allow(non_snake_case)]
 #[cfg(target_pointer_width = "64")]
-pub unsafe fn SetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+unsafe fn SetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
     WindowsAndMessaging::SetWindowLongPtrA(window, index, value)
 }
 
 #[allow(non_snake_case)]
 #[cfg(target_pointer_width = "32")]
-pub unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
+unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
     WindowsAndMessaging::GetWindowLongA(window, index) as _
 }
 
 #[allow(non_snake_case)]
 #[cfg(target_pointer_width = "64")]
-pub unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
+unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
     WindowsAndMessaging::GetWindowLongPtrA(window, index)
 }
