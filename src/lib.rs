@@ -90,14 +90,41 @@ impl Drop for Window {
     }
 }
 
+struct WebViewController(ICoreWebView2Controller);
+
+type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
+type BindingsMap = HashMap<String, BindingCallback>;
+
 #[derive(Clone)]
-pub struct FrameWindow {
-    window: Arc<HWND>,
-    size: Arc<Mutex<SIZE>>,
+pub struct WebView {
+    controller: Arc<WebViewController>,
+    pub webview: Arc<ICoreWebView2>,
+    thread_id: u32,
+    bindings: Arc<Mutex<BindingsMap>>,
+    hwnd: HWND,
+    parent: Arc<HWND>,
 }
 
-impl FrameWindow {
-    fn new() -> Self {
+impl Drop for WebViewController {
+    fn drop(&mut self) {
+        unsafe { self.0.Close() }.unwrap();
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct InvokeMessage {
+    id: u64,
+    method: String,
+    params: Vec<Value>,
+}
+
+impl WebView {
+    pub fn create(parent: Option<HWND>, debug: bool) -> Result<WebView> {
+        unsafe {
+            CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
+        }
+        set_process_dpi_awareness()?;
+
         let hwnd = {
             let class_name = "WebView";
             let c_class_name = CString::new(class_name).expect("lpszClassName");
@@ -127,55 +154,7 @@ impl FrameWindow {
             }
         };
 
-        FrameWindow {
-            window: Arc::new(hwnd),
-            size: Arc::new(Mutex::new(SIZE { cx: 0, cy: 0 })),
-        }
-    }
-}
-
-struct WebViewController(ICoreWebView2Controller);
-
-type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
-type BindingsMap = HashMap<String, BindingCallback>;
-
-#[derive(Clone)]
-pub struct WebView {
-    controller: Arc<WebViewController>,
-    pub webview: Arc<ICoreWebView2>,
-    thread_id: u32,
-    bindings: Arc<Mutex<BindingsMap>>,
-    frame: Option<FrameWindow>,
-    parent: Arc<HWND>,
-}
-
-impl Drop for WebViewController {
-    fn drop(&mut self) {
-        unsafe { self.0.Close() }.unwrap();
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct InvokeMessage {
-    id: u64,
-    method: String,
-    params: Vec<Value>,
-}
-
-impl WebView {
-    pub fn create(parent: Option<HWND>, debug: bool) -> Result<WebView> {
-        unsafe {
-            CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
-        }
-        set_process_dpi_awareness()?;
-
-        let (parent, frame) = match parent {
-            Some(hwnd) => (hwnd, None),
-            None => {
-                let frame = FrameWindow::new();
-                (*frame.window, Some(frame))
-            }
-        };
+        let parent = hwnd;
 
         let environment = {
             let (tx, rx) = mpsc::channel();
@@ -241,10 +220,6 @@ impl WebView {
             }
         }
 
-        if let Some(frame) = frame.as_ref() {
-            *frame.size.lock()? = size;
-        }
-
         let thread_id = unsafe { Threading::GetCurrentThreadId() };
 
         let webview = WebView {
@@ -252,7 +227,7 @@ impl WebView {
             webview: Arc::new(webview),
             thread_id,
             bindings: Arc::new(Mutex::new(HashMap::new())),
-            frame,
+            hwnd,
             parent: Arc::new(parent),
         };
 
@@ -287,21 +262,17 @@ impl WebView {
             )?;
         }
 
-        if webview.frame.is_some() {
-            WebView::set_window_webview(parent, Some(Box::new(webview.clone())));
-        }
+        WebView::set_window_webview(parent, Some(Box::new(webview.clone())));
 
         Ok(webview)
     }
 
     pub fn run(self) -> Result<()> {
-        if let Some(frame) = self.frame.as_ref() {
-            let hwnd = *frame.window;
-            unsafe {
-                WindowsAndMessaging::ShowWindow(hwnd, WindowsAndMessaging::SW_SHOW);
-                Gdi::UpdateWindow(hwnd);
-                KeyboardAndMouse::SetFocus(hwnd);
-            }
+        let hwnd = self.hwnd;
+        unsafe {
+            WindowsAndMessaging::ShowWindow(hwnd, WindowsAndMessaging::SW_SHOW);
+            Gdi::UpdateWindow(hwnd);
+            KeyboardAndMouse::SetFocus(hwnd);
         }
 
         let mut msg = MSG::default();
@@ -326,40 +297,32 @@ impl WebView {
     }
 
     pub fn set_title(&self, title: &str) -> Result<&Self> {
-        if let Some(frame) = self.frame.as_ref() {
-            unsafe {
-                WindowsAndMessaging::SetWindowTextA(*frame.window, title);
-            }
+        unsafe {
+            WindowsAndMessaging::SetWindowTextA(self.hwnd, title);
         }
         Ok(self)
     }
 
     pub fn set_size(&self, width: i32, height: i32) -> Result<&Self> {
-        if let Some(frame) = self.frame.as_ref() {
-            *frame.size.lock().expect("lock size") = SIZE {
-                cx: width,
-                cy: height,
-            };
-            unsafe {
-                self.controller.0.SetBounds(RECT {
-                    left: 0,
-                    top: 0,
-                    right: width,
-                    bottom: height,
-                })?;
+        unsafe {
+            self.controller.0.SetBounds(RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            })?;
 
-                WindowsAndMessaging::SetWindowPos(
-                    *frame.window,
-                    None,
-                    0,
-                    0,
-                    width,
-                    height,
-                    WindowsAndMessaging::SWP_NOACTIVATE
-                        | WindowsAndMessaging::SWP_NOZORDER
-                        | WindowsAndMessaging::SWP_NOMOVE,
-                );
-            }
+            WindowsAndMessaging::SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                width,
+                height,
+                WindowsAndMessaging::SWP_NOACTIVATE
+                    | WindowsAndMessaging::SWP_NOZORDER
+                    | WindowsAndMessaging::SWP_NOMOVE,
+            );
         }
         Ok(self)
     }
@@ -477,10 +440,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
         None => return unsafe { WindowsAndMessaging::DefWindowProcA(hwnd, msg, w_param, l_param) },
     };
 
-    let frame = webview
-        .frame
-        .as_ref()
-        .expect("should only be called for owned windows");
+    let frame = webview.hwnd;
 
     match msg {
         WindowsAndMessaging::WM_APP => {
@@ -507,7 +467,6 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
                     })
                     .unwrap();
             }
-            *frame.size.lock().expect("lock size") = size;
             LRESULT::default()
         }
 
