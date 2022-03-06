@@ -7,7 +7,7 @@ use std::thread::{sleep, spawn};
 use std::time::Duration;
 
 fn main() -> taco::Result<()> {
-    let webview = WebView::create(None, true)?;
+    let webview = WebView::create(true)?;
 
     // Bind a quick and dirty calculator callback.
     webview.bind("hostCallback", move |request| {

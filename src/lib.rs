@@ -119,7 +119,7 @@ struct InvokeMessage {
 }
 
 impl WebView {
-    pub fn create(parent: Option<HWND>, debug: bool) -> Result<WebView> {
+    pub fn create(debug: bool) -> Result<WebView> {
         unsafe {
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
         }
@@ -154,8 +154,6 @@ impl WebView {
             }
         };
 
-        let parent = hwnd;
-
         let environment = {
             let (tx, rx) = mpsc::channel();
 
@@ -182,7 +180,7 @@ impl WebView {
             CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
                 Box::new(move |handler| unsafe {
                     environment
-                        .CreateCoreWebView2Controller(parent, handler)
+                        .CreateCoreWebView2Controller(hwnd, handler)
                         .map_err(webview2_com::Error::WindowsError)
                 }),
                 Box::new(move |error_code, controller| {
@@ -197,10 +195,10 @@ impl WebView {
                 .map_err(|_| Error::WebView2Error(webview2_com::Error::SendError))?
         }?;
 
-        let size = get_window_size(parent);
+        let size = get_window_size(hwnd);
         let mut client_rect = RECT::default();
         unsafe {
-            WindowsAndMessaging::GetClientRect(parent, std::mem::transmute(&mut client_rect));
+            WindowsAndMessaging::GetClientRect(hwnd, std::mem::transmute(&mut client_rect));
             controller.SetBounds(RECT {
                 left: 0,
                 top: 0,
@@ -228,7 +226,7 @@ impl WebView {
             thread_id,
             bindings: Arc::new(Mutex::new(HashMap::new())),
             hwnd,
-            parent: Arc::new(parent),
+            parent: Arc::new(hwnd),
         };
 
         // Inject the invoke handler.
@@ -262,7 +260,7 @@ impl WebView {
             )?;
         }
 
-        WebView::set_window_webview(parent, Some(Box::new(webview.clone())));
+        WebView::set_window_webview(hwnd, Some(Box::new(webview.clone())));
 
         Ok(webview)
     }
@@ -439,8 +437,6 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
         Some(webview) => webview,
         None => return unsafe { WindowsAndMessaging::DefWindowProcA(hwnd, msg, w_param, l_param) },
     };
-
-    let frame = webview.hwnd;
 
     match msg {
         WindowsAndMessaging::WM_APP => {
