@@ -246,8 +246,13 @@ impl WebView {
                                 if let Ok(mut bindings) = bindings.try_lock() {
                                     if let Some(f) = bindings.get_mut(&value.method) {
                                         match (*f)(value.params) {
-                                            Ok(result) => println!("ok! {:?}", result),
-                                            Err(err) => println!("err! {:?}", err),
+                                            Ok(result) => resolve(hwnd, value.id, 0, result),
+                                            Err(err) => resolve(
+                                                hwnd,
+                                                value.id,
+                                                1,
+                                                Value::String(format!("{:#?}", err)),
+                                            ),
                                         }
                                     }
                                 }
@@ -553,4 +558,23 @@ pub fn navigate(hwnd: HWND, url: String) {
             result.unwrap();
         }
     });
+}
+
+pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
+    let result = result.to_string();
+
+    dispatch(hwnd, move |webview| {
+        let method = match status {
+            0 => "resolve",
+            _ => "reject",
+        };
+        let js = format!(
+            r#"
+            window._rpc[{}].{}({});
+            window._rpc[{}] = undefined;"#,
+            id, method, result, id
+        );
+
+        webview.eval(&js).expect("eval return script");
+    })
 }
