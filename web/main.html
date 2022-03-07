@@ -16,6 +16,23 @@
     <p>そうだよ（便乗）</p>
 
     <button onclick="window.hostCallback('A', 32, 67); console.log('よは？');">hostCallback("Add", 32, 67)</button>
+    <p>
+        <button onclick="charge(1)">charge 1</button>
+        <button onclick="charge(5)">charge 5</button>
+        <button onclick="charge(-1)">charge -1</button>
+    </p>
+
+    <div>
+        <h3>URLを入力してページ遷移</h3>
+        <input type="url" id="urlbox">
+        <button onclick="go()">Go!</button>
+        <script>
+            function go() {
+                url = document.getElementById('urlbox').value;
+                document.location = url;
+            }
+        </script>
+    </div>
 
 </body>
 

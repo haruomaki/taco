@@ -431,7 +431,6 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
 
     match msg {
         WindowsAndMessaging::WM_APP => {
-            println!("WM_APPを受け取ったお");
             let p = l_param.0 as *mut Box<dyn FnOnce(&WebView)>;
             unsafe {
                 let fbb = Box::from_raw(p);
