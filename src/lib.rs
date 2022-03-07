@@ -348,20 +348,6 @@ impl WebView {
         Ok(self)
     }
 
-    pub fn eval(&self, js: &str) -> Result<&Self> {
-        let webview = self.webview.clone();
-        let js = String::from(js);
-        ExecuteScriptCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| unsafe {
-                webview
-                    .ExecuteScript(js, handler)
-                    .map_err(webview2_com::Error::WindowsError)
-            }),
-            Box::new(|error_code, _result| error_code),
-        )?;
-        Ok(self)
-    }
-
     pub fn bind<F>(&self, name: &str, f: F) -> Result<&Self>
     where
         F: FnMut(Vec<Value>) -> Result<Value> + 'static,
@@ -563,7 +549,7 @@ pub fn navigate(hwnd: HWND, url: String) {
 pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
     let result = result.to_string();
 
-    dispatch(hwnd, move |webview| {
+    dispatch(hwnd, move |_webview| {
         let method = match status {
             0 => "resolve",
             _ => "reject",
@@ -575,6 +561,22 @@ pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
             id, method, result, id
         );
 
-        webview.eval(&js).expect("eval return script");
+        eval(hwnd, &js);
     })
+}
+
+pub fn eval(hwnd: HWND, js: &str) {
+    dispatch(hwnd, move |webview| {
+        let webview = webview.webview.clone();
+        let js = String::from(js);
+        ExecuteScriptCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| unsafe {
+                webview
+                    .ExecuteScript(js, handler)
+                    .map_err(webview2_com::Error::WindowsError)
+            }),
+            Box::new(|error_code, _result| error_code),
+        )
+        .unwrap();
+    });
 }
