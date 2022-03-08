@@ -348,6 +348,38 @@ impl WebView {
         Ok(self)
     }
 
+    pub fn navigate(&self, url: String) {
+        let webview = self.webview.as_ref();
+        let (tx, rx) = mpsc::channel();
+
+        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
+            tx.send(()).expect("send over mpsc channel");
+            Ok(())
+        }));
+        let mut token = EventRegistrationToken::default();
+        unsafe {
+            webview.NavigationCompleted(handler, &mut token).unwrap();
+            webview.Navigate(url).unwrap();
+            let result = webview2_com::wait_with_pump(rx);
+            webview.RemoveNavigationCompleted(token).unwrap();
+            result.unwrap();
+        }
+    }
+
+    pub fn eval(&self, js: &str) -> Result<&Self> {
+        let webview = self.webview.clone();
+        let js = String::from(js);
+        ExecuteScriptCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| unsafe {
+                webview
+                    .ExecuteScript(js, handler)
+                    .map_err(webview2_com::Error::WindowsError)
+            }),
+            Box::new(|error_code, _result| error_code),
+        )?;
+        Ok(self)
+    }
+
     pub fn bind<F>(&self, name: &str, f: F) -> Result<&Self>
     where
         F: FnMut(Vec<Value>) -> Result<Value> + 'static,
@@ -524,58 +556,43 @@ where
     };
 }
 
-pub fn navigate(hwnd: HWND, url: String) {
-    dispatch(hwnd, |slf| {
-        let webview = slf.webview.as_ref();
-        // let url = slf.url.try_lock()?.clone();
-        let (tx, rx) = mpsc::channel();
-
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-            tx.send(()).expect("send over mpsc channel");
-            Ok(())
-        }));
-        let mut token = EventRegistrationToken::default();
-        unsafe {
-            webview.NavigationCompleted(handler, &mut token).unwrap();
-            webview.Navigate(url).unwrap();
-            let result = webview2_com::wait_with_pump(rx);
-            webview.RemoveNavigationCompleted(token).unwrap();
-            result.unwrap();
-        }
-    });
-}
-
 pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
     let result = result.to_string();
-
-    dispatch(hwnd, move |_webview| {
-        let method = match status {
-            0 => "resolve",
-            _ => "reject",
-        };
-        let js = format!(
-            r#"
+    let method = match status {
+        0 => "resolve",
+        _ => "reject",
+    };
+    let js = format!(
+        r#"
             window._rpc[{}].{}({});
             window._rpc[{}] = undefined;"#,
-            id, method, result, id
-        );
+        id, method, result, id
+    );
 
-        eval(hwnd, &js);
-    })
+    dispatch_eval(hwnd, &js);
 }
 
-pub fn eval(hwnd: HWND, js: &str) {
+pub fn dispatch_eval(hwnd: HWND, js: &str) {
     dispatch(hwnd, move |webview| {
-        let webview = webview.webview.clone();
-        let js = String::from(js);
-        ExecuteScriptCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| unsafe {
-                webview
-                    .ExecuteScript(js, handler)
-                    .map_err(webview2_com::Error::WindowsError)
-            }),
-            Box::new(|error_code, _result| error_code),
-        )
-        .unwrap();
+        webview.eval(js).unwrap();
     });
+}
+
+pub fn adjust_to_content(hwnd: HWND, body_scroll_width: i32, body_scroll_height: i32) {
+    // println!(
+    //     "adjust_to_contentが呼ばれたよ！ {:?} {:?}",
+    //     body_scroll_width, body_scroll_height
+    // );
+
+    unsafe {
+        WindowsAndMessaging::SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            body_scroll_width * 2 + 26,  // dpiとクライアント領域の補正
+            body_scroll_height * 2 + 71, // TODO: 補正を自動化
+            WindowsAndMessaging::SWP_NOMOVE | WindowsAndMessaging::SWP_NOZORDER,
+        );
+    }
 }

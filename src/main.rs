@@ -3,6 +3,8 @@
 use taco::serde_json::{Number, Value};
 use taco::WebView;
 
+use taco::windows::Win32::UI::WindowsAndMessaging::*;
+
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
@@ -44,6 +46,21 @@ fn main() -> taco::Result<()> {
         ))
     })?;
 
+    let hwnd = webview.get_window();
+    webview.bind("adjustToContent", move |request| {
+        // println!("adjustToContentはじめ");
+        if let [Value::Number(width), Value::Number(height)] = &request[..] {
+            let width = width.as_i64().unwrap() as i32;
+            let height = height.as_i64().unwrap() as i32;
+            taco::adjust_to_content(hwnd, width, height);
+            return Ok(Value::Null);
+        }
+
+        Err(taco::Error::WebView2Error(
+            webview2_com::Error::CallbackError(String::from(r#"Usage: window.charge(x)"#)),
+        ))
+    })?;
+
     // // Configure the target URL and add an init script to trigger the calculator callback.
     // webview
     //     .set_title("webview2-com example (crates/webview2-com/examples)")?
@@ -53,18 +70,20 @@ fn main() -> taco::Result<()> {
     //     // .navigate("https://github.com/wravery/webview2-rs")?;
     //     .navigate("C:\\Users\\haruo\\projects\\taco\\web\\main.html")?;
 
-    let count = counter.clone();
-    let hwnd = webview.get_window();
-    spawn(move || loop {
-        sleep(Duration::from_millis(1000));
-        let lock = count.lock().unwrap();
-        println!("カウントは今 {} だよ", lock);
-    });
+    // let count = counter.clone();
+    // spawn(move || loop {
+    //     sleep(Duration::from_millis(1000));
+    //     let lock = count.lock().unwrap();
+    //     println!("カウントは今 {} だよ", lock);
+    // });
 
-    taco::navigate(
-        hwnd,
-        String::from("C:\\Users\\haruo\\projects\\taco\\web\\main.html"),
-    );
+    webview.navigate(String::from(
+        "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
+    ));
+
+    webview
+        .eval("adjustToContent(document.body.scrollWidth, document.body.scrollHeight)")
+        .unwrap();
 
     // Off we go....
     webview.run()
