@@ -10,7 +10,13 @@ use std::thread::{sleep, spawn};
 use std::time::Duration;
 
 fn main() -> taco::Result<()> {
-    let webview = WebView::create(true)?;
+    let webview = WebView::create(
+        WS_OVERLAPPEDWINDOW,
+        Default::default(),
+        "たいとるです",
+        true,
+        false,
+    )?;
 
     let counter = Arc::new(Mutex::new(0));
 
@@ -84,8 +90,6 @@ fn main() -> taco::Result<()> {
     webview
         .eval("adjustToContent(document.body.scrollWidth, document.body.scrollHeight)")
         .unwrap();
-
-    webview.bg();
 
     // Off we go....
     webview.run()

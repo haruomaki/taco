@@ -119,7 +119,13 @@ struct InvokeMessage {
 }
 
 impl WebView {
-    pub fn create(debug: bool) -> Result<WebView> {
+    pub fn create(
+        style: WindowsAndMessaging::WINDOW_STYLE,
+        mut exstyle: WindowsAndMessaging::WINDOW_EX_STYLE,
+        title: &str,
+        debug: bool,
+        transparent: bool,
+    ) -> Result<WebView> {
         unsafe {
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
         }
@@ -134,14 +140,18 @@ impl WebView {
                 ..WNDCLASSA::default()
             };
 
+            if transparent {
+                exstyle |= WindowsAndMessaging::WS_EX_LAYERED
+            }
+
             unsafe {
                 WindowsAndMessaging::RegisterClassA(&window_class);
 
                 WindowsAndMessaging::CreateWindowExA(
-                    WindowsAndMessaging::WS_EX_LAYERED,
+                    exstyle,
                     class_name,
-                    class_name,
-                    WindowsAndMessaging::WS_OVERLAPPEDWINDOW,
+                    title,
+                    style,
                     WindowsAndMessaging::CW_USEDEFAULT,
                     WindowsAndMessaging::CW_USEDEFAULT,
                     WindowsAndMessaging::CW_USEDEFAULT,
@@ -274,6 +284,10 @@ impl WebView {
         }
 
         WebView::set_window_webview(hwnd, Some(Box::new(webview.clone())));
+
+        if transparent {
+            webview.bg();
+        }
 
         Ok(webview)
     }
