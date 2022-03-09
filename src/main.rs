@@ -85,6 +85,8 @@ fn main() -> taco::Result<()> {
         .eval("adjustToContent(document.body.scrollWidth, document.body.scrollHeight)")
         .unwrap();
 
+    webview.bg();
+
     // Off we go....
     webview.run()
 }

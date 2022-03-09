@@ -138,7 +138,7 @@ impl WebView {
                 WindowsAndMessaging::RegisterClassA(&window_class);
 
                 WindowsAndMessaging::CreateWindowExA(
-                    Default::default(),
+                    WindowsAndMessaging::WS_EX_LAYERED,
                     class_name,
                     class_name,
                     WindowsAndMessaging::WS_OVERLAPPEDWINDOW,
@@ -162,12 +162,16 @@ impl WebView {
                     CreateCoreWebView2Environment(environmentcreatedhandler)
                         .map_err(webview2_com::Error::WindowsError)
                 }),
-                Box::new(move |error_code, environment| {
-                    error_code?;
-                    tx.send(environment.ok_or_else(|| windows::core::Error::fast_error(E_POINTER)))
+                Box::new(
+                    move |error_code, environment: Option<ICoreWebView2Environment>| {
+                        error_code?;
+                        tx.send(
+                            environment.ok_or_else(|| windows::core::Error::fast_error(E_POINTER)),
+                        )
                         .expect("send over mpsc channel");
-                    Ok(())
-                }),
+                        Ok(())
+                    },
+                ),
             )?;
 
             rx.recv()
@@ -183,12 +187,16 @@ impl WebView {
                         .CreateCoreWebView2Controller(hwnd, handler)
                         .map_err(webview2_com::Error::WindowsError)
                 }),
-                Box::new(move |error_code, controller| {
-                    error_code?;
-                    tx.send(controller.ok_or_else(|| windows::core::Error::fast_error(E_POINTER)))
+                Box::new(
+                    move |error_code, controller: Option<ICoreWebView2Controller>| {
+                        error_code?;
+                        tx.send(
+                            controller.ok_or_else(|| windows::core::Error::fast_error(E_POINTER)),
+                        )
                         .expect("send over mpsc channel");
-                    Ok(())
-                }),
+                        Ok(())
+                    },
+                ),
             )?;
 
             rx.recv()
@@ -448,6 +456,30 @@ impl WebView {
             }
         }
     }
+
+    // 背景を透明化
+    // TODO: タイトルバーが透明化されないようにする
+    pub fn bg(&self) {
+        let t = one_to_two(&self.controller.0);
+
+        // セット
+        let backgroundcolor = COREWEBVIEW2_COLOR {
+            R: 20,
+            G: 200,
+            B: 70,
+            A: 0,
+        };
+        unsafe {
+            t.SetDefaultBackgroundColor(backgroundcolor).unwrap();
+        }
+
+        // ゲット
+        let mut backgroundcolor = Default::default();
+        unsafe {
+            t.DefaultBackgroundColor(&mut backgroundcolor).unwrap();
+        }
+        println!("{:?}", backgroundcolor);
+    }
 }
 
 fn set_process_dpi_awareness() -> Result<()> {
@@ -595,4 +627,8 @@ pub fn adjust_to_content(hwnd: HWND, body_scroll_width: i32, body_scroll_height:
             WindowsAndMessaging::SWP_NOMOVE | WindowsAndMessaging::SWP_NOZORDER,
         );
     }
+}
+
+fn one_to_two(one: &ICoreWebView2Controller) -> &ICoreWebView2Controller2 {
+    unsafe { std::mem::transmute(one) }
 }
