@@ -84,12 +84,26 @@ impl Drop for Window {
 type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WebViewBuilder<'a> {
+    pub style: WINDOW_STYLE,
+    pub exstyle: WINDOW_EX_STYLE,
+    pub title: &'a str,
+    pub debug: bool,
+    pub transparent: bool,
+}
+
 #[derive(Clone)]
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
     bindings: Rc<RefCell<BindingsMap>>,
     hwnd: HWND,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WebViewHandle {
+    pub hwnd: HWND,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,14 +113,8 @@ struct InvokeMessage {
     params: Vec<Value>,
 }
 
-impl WebView {
-    pub fn create(
-        style: WINDOW_STYLE,
-        mut exstyle: WINDOW_EX_STYLE,
-        title: &str,
-        debug: bool,
-        transparent: bool,
-    ) -> Result<WebView> {
+impl<'a> WebViewBuilder<'a> {
+    pub fn create(mut self) -> Result<WebViewHandle> {
         unsafe {
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
         }
@@ -121,18 +129,18 @@ impl WebView {
                 ..WNDCLASSA::default()
             };
 
-            if transparent {
-                exstyle |= WS_EX_LAYERED
+            if self.transparent {
+                self.exstyle |= WS_EX_LAYERED
             }
 
             unsafe {
                 RegisterClassA(&window_class);
 
                 CreateWindowExA(
-                    exstyle,
+                    self.exstyle,
                     class_name,
-                    title,
-                    style,
+                    self.title,
+                    self.style,
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
@@ -209,7 +217,7 @@ impl WebView {
 
         let core = unsafe { controller.CoreWebView2()? };
 
-        if !debug {
+        if !self.debug {
             unsafe {
                 let settings = core.Settings()?;
                 settings.SetAreDefaultContextMenusEnabled(false)?;
@@ -217,12 +225,12 @@ impl WebView {
             }
         }
 
-        let webview = WebView {
+        let webview = Box::new(WebView {
             controller,
             core,
             bindings: Rc::new(RefCell::new(HashMap::new())),
             hwnd,
-        };
+        });
 
         // Inject the invoke handler.
         webview
@@ -261,79 +269,17 @@ impl WebView {
             )?;
         }
 
-        if transparent {
+        if self.transparent {
             webview.bg();
-        }
-
-        Ok(webview)
-    }
-
-    pub fn run(self) -> Result<()> {
-        let webview = Box::new(self);
-
-        let hwnd = webview.hwnd;
-        unsafe {
-            ShowWindow(hwnd, SW_SHOW);
-            Gdi::UpdateWindow(hwnd);
-            KeyboardAndMouse::SetFocus(hwnd);
         }
 
         unsafe { SetWindowLong(hwnd, GWLP_USERDATA, Box::into_raw(webview) as _) };
 
-        let mut msg = MSG::default();
-        let h_wnd = HWND::default();
-
-        loop {
-            unsafe {
-                let result = GetMessageA(&mut msg, h_wnd, 0, 0).0;
-
-                match result {
-                    -1 => break Err(windows::core::Error::from_win32().into()),
-                    0 => break Ok(()),
-                    _ => match msg.message {
-                        _ => {
-                            TranslateMessage(&msg);
-                            DispatchMessageA(&msg);
-                        }
-                    },
-                }
-            }
-        }
+        Ok(WebViewHandle { hwnd })
     }
+}
 
-    pub fn set_title(&self, title: &str) -> Result<&Self> {
-        unsafe {
-            SetWindowTextA(self.hwnd, title);
-        }
-        Ok(self)
-    }
-
-    pub fn set_size(&self, width: i32, height: i32) -> Result<&Self> {
-        unsafe {
-            self.controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: width,
-                bottom: height,
-            })?;
-
-            SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                width,
-                height,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE,
-            );
-        }
-        Ok(self)
-    }
-
-    pub fn get_window(&self) -> HWND {
-        self.hwnd
-    }
-
+impl WebView {
     pub fn init(&self, js: &str) -> Result<&Self> {
         let core = self.core.clone();
         let js = String::from(js);
@@ -438,14 +384,49 @@ impl WebView {
     }
 }
 
+impl WebViewHandle {
+    pub fn dispatch(&self, f: impl FnOnce(&WebView)) {
+        dispatch(self.hwnd, f)
+    }
+
+    pub fn run(self) -> Result<()> {
+        let hwnd = self.hwnd;
+        unsafe {
+            ShowWindow(hwnd, SW_SHOW);
+            Gdi::UpdateWindow(hwnd);
+            KeyboardAndMouse::SetFocus(hwnd);
+        }
+
+        let mut msg = MSG::default();
+        let h_wnd = HWND::default();
+
+        loop {
+            unsafe {
+                let result = GetMessageA(&mut msg, h_wnd, 0, 0).0;
+
+                match result {
+                    -1 => break Err(windows::core::Error::from_win32().into()),
+                    0 => break Ok(()),
+                    _ => match msg.message {
+                        _ => {
+                            TranslateMessage(&msg);
+                            DispatchMessageA(&msg);
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
 fn set_process_dpi_awareness() -> Result<()> {
     unsafe { HiDpi::SetProcessDpiAwareness(HiDpi::PROCESS_PER_MONITOR_DPI_AWARE)? };
     Ok(())
 }
 
 extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    let p = unsafe { GetWindowLong(hwnd, GWLP_USERDATA) } as *mut WebView;
     let webview = unsafe {
-        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut WebView;
         if p.is_null() {
             if msg == WM_APP {
                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -494,6 +475,11 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
             unsafe { PostQuitMessage(0) };
             LRESULT::default()
         }
+
+        WM_NCDESTROY => unsafe {
+            let _webview = Box::from_raw(p);
+            LRESULT::default()
+        },
 
         _ => unsafe { DefWindowProcA(hwnd, msg, w_param, l_param) },
     }
