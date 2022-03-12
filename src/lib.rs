@@ -90,25 +90,15 @@ impl Drop for Window {
     }
 }
 
-struct WebViewController(ICoreWebView2Controller);
-
 type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 #[derive(Clone)]
 pub struct WebView {
-    controller: Arc<WebViewController>,
-    pub webview: Arc<ICoreWebView2>,
-    thread_id: u32,
+    pub controller: ICoreWebView2Controller,
+    pub webview: ICoreWebView2,
     bindings: Arc<Mutex<BindingsMap>>,
     hwnd: HWND,
-    parent: Arc<HWND>,
-}
-
-impl Drop for WebViewController {
-    fn drop(&mut self) {
-        unsafe { self.0.Close() }.unwrap();
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,15 +226,11 @@ impl WebView {
             }
         }
 
-        let thread_id = unsafe { Threading::GetCurrentThreadId() };
-
         let webview = WebView {
-            controller: Arc::new(WebViewController(controller)),
-            webview: Arc::new(webview),
-            thread_id,
+            controller,
+            webview,
             bindings: Arc::new(Mutex::new(HashMap::new())),
             hwnd,
-            parent: Arc::new(hwnd),
         };
 
         // Inject the invoke handler.
@@ -283,8 +269,6 @@ impl WebView {
             )?;
         }
 
-        WebView::set_window_webview(hwnd, Some(Box::new(webview.clone())));
-
         if transparent {
             webview.bg();
         }
@@ -293,12 +277,22 @@ impl WebView {
     }
 
     pub fn run(self) -> Result<()> {
-        let hwnd = self.hwnd;
+        let webview = Box::new(self);
+
+        let hwnd = webview.hwnd;
         unsafe {
             WindowsAndMessaging::ShowWindow(hwnd, WindowsAndMessaging::SW_SHOW);
             Gdi::UpdateWindow(hwnd);
             KeyboardAndMouse::SetFocus(hwnd);
         }
+
+        unsafe {
+            SetWindowLong(
+                hwnd,
+                WindowsAndMessaging::GWLP_USERDATA,
+                Box::into_raw(webview) as _,
+            )
+        };
 
         let mut msg = MSG::default();
         let h_wnd = HWND::default();
@@ -330,7 +324,7 @@ impl WebView {
 
     pub fn set_size(&self, width: i32, height: i32) -> Result<&Self> {
         unsafe {
-            self.controller.0.SetBounds(RECT {
+            self.controller.SetBounds(RECT {
                 left: 0,
                 top: 0,
                 right: width,
@@ -353,7 +347,7 @@ impl WebView {
     }
 
     pub fn get_window(&self) -> HWND {
-        *self.parent
+        self.hwnd
     }
 
     pub fn init(&self, js: &str) -> Result<&Self> {
@@ -371,7 +365,7 @@ impl WebView {
     }
 
     pub fn navigate(&self, url: String) {
-        let webview = self.webview.as_ref();
+        let webview = &self.webview;
         let (tx, rx) = mpsc::channel();
 
         let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
@@ -437,44 +431,10 @@ impl WebView {
         self.init(&js)
     }
 
-    fn set_window_webview(hwnd: HWND, webview: Option<Box<WebView>>) -> Option<Box<WebView>> {
-        unsafe {
-            match SetWindowLong(
-                hwnd,
-                WindowsAndMessaging::GWLP_USERDATA,
-                match webview {
-                    Some(webview) => Box::into_raw(webview) as _,
-                    None => 0_isize,
-                },
-            ) {
-                0 => None,
-                ptr => Some(Box::from_raw(ptr as *mut _)),
-            }
-        }
-    }
-
-    fn get_window_webview(hwnd: HWND) -> Option<Box<WebView>> {
-        unsafe {
-            let data = GetWindowLong(hwnd, WindowsAndMessaging::GWLP_USERDATA);
-
-            match data {
-                0 => None,
-                _ => {
-                    let webview_ptr = data as *mut WebView;
-                    let raw = Box::from_raw(webview_ptr);
-                    let webview = raw.clone();
-                    mem::forget(raw);
-
-                    Some(webview)
-                }
-            }
-        }
-    }
-
     // 背景を透明化
     // TODO: タイトルバーが透明化されないようにする
     pub fn bg(&self) {
-        let t = one_to_two(&self.controller.0);
+        let t = one_to_two(&self.controller);
 
         // セット
         let backgroundcolor = COREWEBVIEW2_COLOR {
@@ -502,9 +462,12 @@ fn set_process_dpi_awareness() -> Result<()> {
 }
 
 extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-    let webview = match WebView::get_window_webview(hwnd) {
-        Some(webview) => webview,
-        None => return unsafe { WindowsAndMessaging::DefWindowProcA(hwnd, msg, w_param, l_param) },
+    let webview = unsafe {
+        let p = GetWindowLong(hwnd, WindowsAndMessaging::GWLP_USERDATA) as *mut WebView;
+        if p.is_null() {
+            return WindowsAndMessaging::DefWindowProcA(hwnd, msg, w_param, l_param);
+        }
+        &*p
     };
 
     match msg {
@@ -512,7 +475,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
             let p = l_param.0 as *mut Box<dyn FnOnce(&WebView)>;
             unsafe {
                 let fbb = Box::from_raw(p);
-                (*fbb)(webview.as_ref());
+                (*fbb)(webview);
             }
             LRESULT::default()
         }
@@ -522,7 +485,6 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
             unsafe {
                 webview
                     .controller
-                    .0
                     .SetBounds(RECT {
                         left: 0,
                         top: 0,
