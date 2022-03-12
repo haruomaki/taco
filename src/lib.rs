@@ -4,9 +4,11 @@ pub extern crate webview2_com;
 pub extern crate windows;
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ffi::CString,
     fmt, mem, ptr,
+    rc::Rc,
     sync::{mpsc, Arc, Mutex},
 };
 
@@ -97,7 +99,7 @@ type BindingsMap = HashMap<String, BindingCallback>;
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub webview: ICoreWebView2,
-    bindings: Arc<Mutex<BindingsMap>>,
+    bindings: Rc<RefCell<BindingsMap>>,
     hwnd: HWND,
 }
 
@@ -229,7 +231,7 @@ impl WebView {
         let webview = WebView {
             controller,
             webview,
-            bindings: Arc::new(Mutex::new(HashMap::new())),
+            bindings: Rc::new(RefCell::new(HashMap::new())),
             hwnd,
         };
 
@@ -247,17 +249,16 @@ impl WebView {
                         if args.WebMessageAsJson(&mut message).is_ok() {
                             let message = take_pwstr(message);
                             if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
-                                if let Ok(mut bindings) = bindings.try_lock() {
-                                    if let Some(f) = bindings.get_mut(&value.method) {
-                                        match (*f)(value.params) {
-                                            Ok(result) => resolve(hwnd, value.id, 0, result),
-                                            Err(err) => resolve(
-                                                hwnd,
-                                                value.id,
-                                                1,
-                                                Value::String(format!("{:#?}", err)),
-                                            ),
-                                        }
+                                let mut bindings = bindings.borrow_mut();
+                                if let Some(f) = bindings.get_mut(&value.method) {
+                                    match (*f)(value.params) {
+                                        Ok(result) => resolve(hwnd, value.id, 0, result),
+                                        Err(err) => resolve(
+                                            hwnd,
+                                            value.id,
+                                            1,
+                                            Value::String(format!("{:#?}", err)),
+                                        ),
                                     }
                                 }
                             }
@@ -401,7 +402,7 @@ impl WebView {
         F: FnMut(Vec<Value>) -> Result<Value> + 'static,
     {
         self.bindings
-            .lock()?
+            .borrow_mut()
             .insert(String::from(name), Box::new(f));
 
         let js = String::from(
@@ -465,6 +466,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
     let webview = unsafe {
         let p = GetWindowLong(hwnd, WindowsAndMessaging::GWLP_USERDATA) as *mut WebView;
         if p.is_null() {
+            if msg == WindowsAndMessaging::WM_APP {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                WindowsAndMessaging::PostMessageA(hwnd, msg, w_param, l_param);
+            }
             return WindowsAndMessaging::DefWindowProcA(hwnd, msg, w_param, l_param);
         }
         &*p

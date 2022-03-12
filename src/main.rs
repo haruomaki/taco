@@ -83,6 +83,23 @@ fn main() -> taco::Result<()> {
     //     println!("カウントは今 {} だよ", lock);
     // });
 
+    // spawn(move || {
+    //     sleep(Duration::from_millis(1000));
+    taco::dispatch(hwnd, |webview| {
+        webview
+            .bind("み", |_request| {
+                if let Some(result) = Number::from_f64(333.) {
+                    return Ok(Value::Number(result));
+                }
+
+                Err(taco::Error::WebView2Error(
+                    webview2_com::Error::CallbackError(String::from(r#"Usage: window.み()"#)),
+                ))
+            })
+            .unwrap();
+    });
+    // });
+
     webview.navigate(String::from(
         "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
     ));
