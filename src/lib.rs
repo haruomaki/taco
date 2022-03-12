@@ -3,14 +3,7 @@ pub extern crate serde_json;
 pub extern crate webview2_com;
 pub extern crate windows;
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    ffi::CString,
-    fmt, mem, ptr,
-    rc::Rc,
-    sync::{mpsc, Arc, Mutex},
-};
+use std::{cell::RefCell, collections::HashMap, ffi::CString, fmt, ptr, rc::Rc, sync::mpsc};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -19,7 +12,7 @@ use windows::{
     Win32::{
         Foundation::{E_POINTER, HWND, LPARAM, LRESULT, PSTR, PWSTR, RECT, SIZE, WPARAM},
         Graphics::Gdi,
-        System::{Com::*, LibraryLoader, Threading, WinRT::EventRegistrationToken},
+        System::{Com::*, LibraryLoader, WinRT::EventRegistrationToken},
         UI::{HiDpi, Input::KeyboardAndMouse, WindowsAndMessaging::*},
     },
 };
@@ -94,7 +87,7 @@ type BindingsMap = HashMap<String, BindingCallback>;
 #[derive(Clone)]
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
-    pub webview: ICoreWebView2,
+    pub core: ICoreWebView2,
     bindings: Rc<RefCell<BindingsMap>>,
     hwnd: HWND,
 }
@@ -214,11 +207,11 @@ impl WebView {
             controller.SetIsVisible(true)?;
         }
 
-        let webview = unsafe { controller.CoreWebView2()? };
+        let core = unsafe { controller.CoreWebView2()? };
 
         if !debug {
             unsafe {
-                let settings = webview.Settings()?;
+                let settings = core.Settings()?;
                 settings.SetAreDefaultContextMenusEnabled(false)?;
                 settings.SetAreDevToolsEnabled(false)?;
             }
@@ -226,7 +219,7 @@ impl WebView {
 
         let webview = WebView {
             controller,
-            webview,
+            core,
             bindings: Rc::new(RefCell::new(HashMap::new())),
             hwnd,
         };
@@ -238,30 +231,32 @@ impl WebView {
         let bindings = webview.bindings.clone();
         unsafe {
             let mut _token = EventRegistrationToken::default();
-            webview.webview.WebMessageReceived(
-                WebMessageReceivedEventHandler::create(Box::new(move |_webview, args| {
-                    if let Some(args) = args {
-                        let mut message = PWSTR::default();
-                        if args.WebMessageAsJson(&mut message).is_ok() {
-                            let message = take_pwstr(message);
-                            if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
-                                let mut bindings = bindings.borrow_mut();
-                                if let Some(f) = bindings.get_mut(&value.method) {
-                                    match (*f)(value.params) {
-                                        Ok(result) => resolve(hwnd, value.id, 0, result),
-                                        Err(err) => resolve(
-                                            hwnd,
-                                            value.id,
-                                            1,
-                                            Value::String(format!("{:#?}", err)),
-                                        ),
+            webview.core.WebMessageReceived(
+                WebMessageReceivedEventHandler::create(Box::new(
+                    move |_core, args: Option<ICoreWebView2WebMessageReceivedEventArgs>| {
+                        if let Some(args) = args {
+                            let mut message = PWSTR::default();
+                            if args.WebMessageAsJson(&mut message).is_ok() {
+                                let message = take_pwstr(message);
+                                if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
+                                    let mut bindings = bindings.borrow_mut();
+                                    if let Some(f) = bindings.get_mut(&value.method) {
+                                        match (*f)(value.params) {
+                                            Ok(result) => resolve(hwnd, value.id, 0, result),
+                                            Err(err) => resolve(
+                                                hwnd,
+                                                value.id,
+                                                1,
+                                                Value::String(format!("{:#?}", err)),
+                                            ),
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    Ok(())
-                })),
+                        Ok(())
+                    },
+                )),
                 &mut _token,
             )?;
         }
@@ -340,12 +335,11 @@ impl WebView {
     }
 
     pub fn init(&self, js: &str) -> Result<&Self> {
-        let webview = self.webview.clone();
+        let core = self.core.clone();
         let js = String::from(js);
         AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
             Box::new(move |handler| unsafe {
-                webview
-                    .AddScriptToExecuteOnDocumentCreated(js, handler)
+                core.AddScriptToExecuteOnDocumentCreated(js, handler)
                     .map_err(webview2_com::Error::WindowsError)
             }),
             Box::new(|error_code, _id| error_code),
@@ -354,7 +348,7 @@ impl WebView {
     }
 
     pub fn navigate(&self, url: String) {
-        let webview = &self.webview;
+        let core = &self.core;
         let (tx, rx) = mpsc::channel();
 
         let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
@@ -363,21 +357,20 @@ impl WebView {
         }));
         let mut token = EventRegistrationToken::default();
         unsafe {
-            webview.NavigationCompleted(handler, &mut token).unwrap();
-            webview.Navigate(url).unwrap();
+            core.NavigationCompleted(handler, &mut token).unwrap();
+            core.Navigate(url).unwrap();
             let result = webview2_com::wait_with_pump(rx);
-            webview.RemoveNavigationCompleted(token).unwrap();
+            core.RemoveNavigationCompleted(token).unwrap();
             result.unwrap();
         }
     }
 
     pub fn eval(&self, js: &str) -> Result<&Self> {
-        let webview = self.webview.clone();
+        let core = self.core.clone();
         let js = String::from(js);
         ExecuteScriptCompletedHandler::wait_for_async_operation(
             Box::new(move |handler| unsafe {
-                webview
-                    .ExecuteScript(js, handler)
+                core.ExecuteScript(js, handler)
                     .map_err(webview2_com::Error::WindowsError)
             }),
             Box::new(|error_code, _result| error_code),
