@@ -92,7 +92,7 @@ impl Drop for Window {
 type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebViewBuilder {
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
@@ -340,7 +340,7 @@ impl WebView {
         Ok(self)
     }
 
-    pub fn navigate(&self, url: String) {
+    pub fn navigate(&self, url: &str) {
         let core = &self.core;
         let (tx, rx) = mpsc::channel();
 
@@ -434,6 +434,10 @@ impl WebView {
 impl WebViewHandle {
     pub fn dispatch(&self, f: impl FnOnce(&WebView)) {
         dispatch(self.hwnd, f)
+    }
+
+    pub fn show(&self) {
+        unsafe { ShowWindow(self.hwnd, SW_SHOW) };
     }
 }
 

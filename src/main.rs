@@ -11,7 +11,7 @@ use std::time::Duration;
 
 fn main() -> taco::Result<()> {
     let (h, wvh) = taco::WebViewBuilder {
-        style: WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        style: WS_OVERLAPPEDWINDOW,
         exstyle: Default::default(),
         title: "たいとるです",
         debug: true,
@@ -76,13 +76,13 @@ fn main() -> taco::Result<()> {
             })
             .unwrap();
 
-        webview.navigate(String::from(
-            "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
-        ));
+        webview.navigate("C:\\Users\\haruo\\projects\\taco\\web\\main.html");
 
         webview
             .eval("adjustToContent(document.body.scrollWidth, document.body.scrollHeight)")
             .unwrap();
+
+        wvh.show();
     });
 
     // Off we go....
