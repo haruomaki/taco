@@ -564,12 +564,12 @@ pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
         id, method, result, id
     );
 
-    dispatch_eval(hwnd, &js);
+    dispatch_eval(hwnd, js);
 }
 
-pub fn dispatch_eval(hwnd: HWND, js: &str) {
+pub fn dispatch_eval(hwnd: HWND, js: String) {
     dispatch(hwnd, move |webview| {
-        webview.eval(js).unwrap();
+        webview.eval(&js).unwrap();
     });
 }
 
