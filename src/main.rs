@@ -10,19 +10,19 @@ use std::thread::{sleep, spawn};
 use std::time::Duration;
 
 fn main() -> taco::Result<()> {
-    let h = taco::WebViewBuilder {
-        style: WS_OVERLAPPEDWINDOW,
+    let (h, wvh) = taco::WebViewBuilder {
+        style: WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         exstyle: Default::default(),
         title: "たいとるです",
         debug: true,
         transparent: false,
     }
-    .create()?;
+    .start()?;
 
-    let hwnd = h.hwnd;
+    let hwnd = wvh.hwnd;
     let counter = Arc::new(Mutex::new(0));
 
-    h.dispatch(move |webview| {
+    wvh.dispatch(move |webview| {
         // Bind a quick and dirty calculator callback.
         webview
             .bind("hostCallback", move |request| {
@@ -86,5 +86,5 @@ fn main() -> taco::Result<()> {
     });
 
     // Off we go....
-    h.run()
+    h.join().unwrap()
 }

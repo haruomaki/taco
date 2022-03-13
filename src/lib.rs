@@ -3,7 +3,15 @@ pub extern crate serde_json;
 pub extern crate webview2_com;
 pub extern crate windows;
 
-use std::{cell::RefCell, collections::HashMap, ffi::CString, fmt, ptr, rc::Rc, sync::mpsc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    ffi::CString,
+    fmt, ptr,
+    rc::Rc,
+    sync::mpsc,
+    thread::{spawn, JoinHandle},
+};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -85,10 +93,10 @@ type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WebViewBuilder<'a> {
+pub struct WebViewBuilder {
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
-    pub title: &'a str,
+    pub title: &'static str,
     pub debug: bool,
     pub transparent: bool,
 }
@@ -113,8 +121,8 @@ struct InvokeMessage {
     params: Vec<Value>,
 }
 
-impl<'a> WebViewBuilder<'a> {
-    pub fn create(mut self) -> Result<WebViewHandle> {
+impl WebViewBuilder {
+    fn create(mut self) -> Result<HWND> {
         unsafe {
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
         }
@@ -275,7 +283,46 @@ impl<'a> WebViewBuilder<'a> {
 
         unsafe { SetWindowLong(hwnd, GWLP_USERDATA, Box::into_raw(webview) as _) };
 
-        Ok(WebViewHandle { hwnd })
+        Ok(hwnd)
+    }
+
+    pub fn start(self) -> Result<(JoinHandle<Result<()>>, WebViewHandle)> {
+        let (tx, rx) = mpsc::channel();
+        let h = spawn(move || {
+            let result = self.create();
+            match result {
+                Ok(hwnd) => tx.send(Ok(hwnd)).unwrap(),
+                Err(err) => {
+                    tx.send(Err(err)).unwrap();
+                    return Ok(());
+                }
+            }
+
+            let mut msg = MSG::default();
+            let h_wnd = HWND::default();
+
+            loop {
+                unsafe {
+                    let result = GetMessageA(&mut msg, h_wnd, 0, 0).0;
+
+                    match result {
+                        -1 => break Err(windows::core::Error::from_win32().into()),
+                        0 => break Ok(()),
+                        _ => match msg.message {
+                            _ => {
+                                TranslateMessage(&msg);
+                                DispatchMessageA(&msg);
+                            }
+                        },
+                    }
+                }
+            }
+        });
+
+        match rx.recv().unwrap() {
+            Ok(hwnd) => Ok((h, WebViewHandle { hwnd })),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -387,35 +434,6 @@ impl WebView {
 impl WebViewHandle {
     pub fn dispatch(&self, f: impl FnOnce(&WebView)) {
         dispatch(self.hwnd, f)
-    }
-
-    pub fn run(self) -> Result<()> {
-        let hwnd = self.hwnd;
-        unsafe {
-            ShowWindow(hwnd, SW_SHOW);
-            Gdi::UpdateWindow(hwnd);
-            KeyboardAndMouse::SetFocus(hwnd);
-        }
-
-        let mut msg = MSG::default();
-        let h_wnd = HWND::default();
-
-        loop {
-            unsafe {
-                let result = GetMessageA(&mut msg, h_wnd, 0, 0).0;
-
-                match result {
-                    -1 => break Err(windows::core::Error::from_win32().into()),
-                    0 => break Ok(()),
-                    _ => match msg.message {
-                        _ => {
-                            TranslateMessage(&msg);
-                            DispatchMessageA(&msg);
-                        }
-                    },
-                }
-            }
-        }
     }
 }
 
