@@ -36,11 +36,7 @@ fn main() -> taco::Result<()> {
                     }
                 }
 
-                Err(taco::Error::WebView2Error(
-                    webview2_com::Error::CallbackError(String::from(
-                        r#"Usage: window.hostCallback("Add", a, b)"#,
-                    )),
-                ))
+                Err(r#"Usage: window.hostCallback("Add", a, b)"#.into())
             })
             .unwrap();
 
@@ -54,9 +50,7 @@ fn main() -> taco::Result<()> {
                     return Ok(Value::Null);
                 }
 
-                Err(taco::Error::WebView2Error(
-                    webview2_com::Error::CallbackError(String::from(r#"Usage: window.charge(x)"#)),
-                ))
+                Err(r#"Usage: window.charge(x)"#.into())
             })
             .unwrap();
 
@@ -70,9 +64,7 @@ fn main() -> taco::Result<()> {
                     return Ok(Value::Null);
                 }
 
-                Err(taco::Error::WebView2Error(
-                    webview2_com::Error::CallbackError(String::from(r#"Usage: window.charge(x)"#)),
-                ))
+                Err(r#"Usage: window.adjustToContent(scrollWidth, scrollHeight)"#.into())
             })
             .unwrap();
 

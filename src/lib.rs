@@ -89,7 +89,7 @@ impl Drop for Window {
     }
 }
 
-type BindingCallback = Box<dyn FnMut(Vec<Value>) -> Result<Value>>;
+type BindingCallback = Box<dyn FnMut(Vec<Value>) -> std::result::Result<Value, String>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -259,12 +259,9 @@ impl WebViewBuilder {
                                     if let Some(f) = bindings.get_mut(&value.method) {
                                         match (*f)(value.params) {
                                             Ok(result) => resolve(hwnd, value.id, 0, result),
-                                            Err(err) => resolve(
-                                                hwnd,
-                                                value.id,
-                                                1,
-                                                Value::String(format!("{:#?}", err)),
-                                            ),
+                                            Err(err) => {
+                                                resolve(hwnd, value.id, 1, Value::String(err))
+                                            }
                                         }
                                     }
                                 }
@@ -373,7 +370,7 @@ impl WebView {
 
     pub fn bind<F>(&self, name: &str, f: F) -> Result<&Self>
     where
-        F: FnMut(Vec<Value>) -> Result<Value> + 'static,
+        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + 'static,
     {
         self.bindings
             .borrow_mut()
