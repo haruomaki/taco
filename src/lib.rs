@@ -97,6 +97,7 @@ pub struct WebViewBuilder {
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
     pub title: &'static str,
+    pub url: &'static str,
     pub debug: bool,
     pub transparent: bool,
 }
@@ -160,6 +161,8 @@ impl WebViewBuilder {
                 )
             }
         };
+
+        let wvh = WebViewHandle { hwnd };
 
         let environment = {
             let (tx, rx) = mpsc::channel();
@@ -276,6 +279,11 @@ impl WebViewBuilder {
 
         if self.transparent {
             webview.bg();
+        }
+
+        if !self.url.is_empty() {
+            webview.navigate(self.url)?;
+            wvh.show();
         }
 
         unsafe { SetWindowLong(hwnd, GWLP_USERDATA, Box::into_raw(webview) as _) };

@@ -14,6 +14,8 @@ fn main() -> taco::Result<()> {
         style: WS_OVERLAPPEDWINDOW,
         exstyle: Default::default(),
         title: "たいとるです",
+        // url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
+        url: "",
         debug: true,
         transparent: false,
     }
