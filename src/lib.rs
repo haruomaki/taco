@@ -337,7 +337,7 @@ impl WebView {
         Ok(self)
     }
 
-    pub fn navigate(&self, url: &str) {
+    pub fn navigate(&self, url: &str) -> Result<&Self> {
         let core = &self.core;
         let (tx, rx) = mpsc::channel();
 
@@ -347,12 +347,12 @@ impl WebView {
         }));
         let mut token = EventRegistrationToken::default();
         unsafe {
-            core.NavigationCompleted(handler, &mut token).unwrap();
-            core.Navigate(url).unwrap();
-            let result = webview2_com::wait_with_pump(rx);
-            core.RemoveNavigationCompleted(token).unwrap();
-            result.unwrap();
+            core.NavigationCompleted(handler, &mut token)?;
+            core.Navigate(url)?;
+            webview2_com::wait_with_pump(rx)?;
+            core.RemoveNavigationCompleted(token)?;
         }
+        Ok(self)
     }
 
     pub fn eval(&self, js: &str) -> Result<&Self> {
@@ -429,7 +429,7 @@ impl WebView {
 }
 
 impl WebViewHandle {
-    pub fn dispatch(&self, f: impl FnOnce(&WebView)) {
+    pub fn dispatch(&self, f: impl FnOnce(&WebView) -> Result<()>) {
         dispatch(self.hwnd, f)
     }
 
@@ -458,10 +458,10 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
 
     match msg {
         WM_APP => {
-            let p = l_param.0 as *mut Box<dyn FnOnce(&WebView)>;
+            let p = l_param.0 as *mut Box<dyn FnOnce(&WebView) -> Result<()>>;
             unsafe {
                 let fbb = Box::from_raw(p);
-                (*fbb)(webview);
+                (*fbb)(webview).unwrap();
             }
             LRESULT::default()
         }
@@ -539,10 +539,10 @@ unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
 
 pub fn dispatch<F>(hwnd: HWND, f: F)
 where
-    F: FnOnce(&WebView),
+    F: FnOnce(&WebView) -> Result<()>,
     // pub fn my_dispatch(hwnd: HWND, f: dyn FnOnce(&WebView))
 {
-    let fb = Box::new(f) as Box<dyn FnOnce(&WebView)>;
+    let fb = Box::new(f) as Box<dyn FnOnce(&WebView) -> Result<()>>;
     let fbb = Box::new(fb);
     let p = Box::into_raw(fbb);
     unsafe { PostMessageA(hwnd, WM_APP, WPARAM(0), LPARAM(p as _)) };
@@ -566,7 +566,8 @@ pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
 
 pub fn dispatch_eval(hwnd: HWND, js: String) {
     dispatch(hwnd, move |webview| {
-        webview.eval(&js).unwrap();
+        webview.eval(&js)?;
+        Ok(())
     });
 }
 
