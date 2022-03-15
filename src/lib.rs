@@ -89,11 +89,12 @@ impl Drop for Window {
     }
 }
 
+type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &WebView) -> LRESULT + Send + 'static>;
 type BindingCallback = Box<dyn FnMut(Vec<Value>) -> std::result::Result<Value, String>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebViewBuilder {
+    pub wndproc: WndProc,
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
     pub title: &'static str,
@@ -105,6 +106,7 @@ pub struct WebViewBuilder {
 impl Default for WebViewBuilder {
     fn default() -> Self {
         Self {
+            wndproc: Box::new(WebViewDefWindowProc),
             style: WS_OVERLAPPEDWINDOW,
             exstyle: WINDOW_EX_STYLE::default(),
             title: "",
@@ -249,12 +251,17 @@ impl WebViewBuilder {
             }
         }
 
-        let webview = Box::new(WebView {
-            controller,
-            core,
-            bindings: Rc::new(RefCell::new(HashMap::new())),
-            hwnd,
-        });
+        let user_data = Box::new((
+            self.wndproc,
+            WebView {
+                controller,
+                core,
+                bindings: Rc::new(RefCell::new(HashMap::new())),
+                hwnd,
+            },
+        ));
+
+        let webview = &user_data.1;
 
         // Inject the invoke handler.
         webview
@@ -299,7 +306,7 @@ impl WebViewBuilder {
             wvh.show();
         }
 
-        unsafe { SetWindowLong(hwnd, GWLP_USERDATA, Box::into_raw(webview) as _) };
+        unsafe { SetWindowLong(hwnd, GWLP_USERDATA, Box::into_raw(user_data) as _) };
 
         Ok(hwnd)
     }
@@ -465,8 +472,8 @@ fn set_process_dpi_awareness() -> Result<()> {
 }
 
 extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-    let p = unsafe { GetWindowLong(hwnd, GWLP_USERDATA) } as *mut WebView;
-    let webview = unsafe {
+    let p = unsafe { GetWindowLong(hwnd, GWLP_USERDATA) } as *mut (WndProc, WebView);
+    let (wndproc, webview) = unsafe {
         if p.is_null() {
             if msg == WM_APP {
                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -474,12 +481,23 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
             }
             return DefWindowProcA(hwnd, msg, w_param, l_param);
         }
-        &*p
+        (&mut (*p).0, &(*p).1)
     };
 
+    (*wndproc)(hwnd, msg, w_param, l_param, webview)
+}
+
+#[allow(non_snake_case)]
+pub fn WebViewDefWindowProc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    webview: &WebView,
+) -> LRESULT {
     match msg {
         WM_APP => {
-            let p = l_param.0 as *mut Box<dyn FnOnce(&WebView) -> Result<()>>;
+            let p = lparam.0 as *mut Box<dyn FnOnce(&WebView) -> Result<()>>;
             unsafe {
                 let fbb = Box::from_raw(p);
                 (*fbb)(webview).unwrap();
@@ -517,11 +535,12 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: L
         }
 
         WM_NCDESTROY => unsafe {
-            let _webview = Box::from_raw(p);
+            let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut (WndProc, WebView);
+            let _user_data = Box::from_raw(p);
             LRESULT::default()
         },
 
-        _ => unsafe { DefWindowProcA(hwnd, msg, w_param, l_param) },
+        _ => unsafe { DefWindowProcA(hwnd, msg, wparam, lparam) },
     }
 }
 

@@ -3,14 +3,26 @@
 use taco::serde_json::{Number, Value};
 use taco::WebView;
 
+use taco::windows::Win32::Foundation::LRESULT;
 use taco::windows::Win32::UI::WindowsAndMessaging::*;
 
+use std::borrow::BorrowMut;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 
 fn main() -> taco::Result<()> {
+    let mut count = 0;
     let (h, wvh) = taco::WebViewBuilder {
+        wndproc: Box::new(move |hwnd, msg, wparam, lparam, webview| match msg {
+            WM_KEYDOWN => {
+                webview.eval("console.log('ぴゃあ')").unwrap();
+                count += 1;
+                println!("かー {}", count);
+                LRESULT::default()
+            }
+            _ => taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, webview),
+        }),
         title: "たいとるです",
         ..Default::default()
     }
