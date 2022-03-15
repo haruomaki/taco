@@ -11,13 +11,8 @@ use std::time::Duration;
 
 fn main() -> taco::Result<()> {
     let (h, wvh) = taco::WebViewBuilder {
-        style: WS_OVERLAPPEDWINDOW,
-        exstyle: Default::default(),
         title: "たいとるです",
-        // url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
-        url: "",
-        debug: true,
-        transparent: false,
+        ..Default::default()
     }
     .start()?;
 

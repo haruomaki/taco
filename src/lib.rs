@@ -102,6 +102,19 @@ pub struct WebViewBuilder {
     pub transparent: bool,
 }
 
+impl Default for WebViewBuilder {
+    fn default() -> Self {
+        Self {
+            style: WS_OVERLAPPEDWINDOW,
+            exstyle: WINDOW_EX_STYLE::default(),
+            title: "",
+            url: "",
+            debug: true,
+            transparent: false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
