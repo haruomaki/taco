@@ -83,6 +83,10 @@ fn main() -> taco::Result<()> {
     println!("ままま");
 
     let (h2, _wvh2) = taco::WebViewBuilder {
+        x: 1,
+        y: 1,
+        width: 300,
+        height: 300,
         url: "https://qiita.com/takao_mofumofu/items/24c060a1d4f6b3df5c73",
         ..Default::default()
     }

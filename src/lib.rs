@@ -96,6 +96,10 @@ pub struct WebViewBuilder {
     pub wndproc: WndProc,
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
     pub title: &'static str,
     pub url: &'static str,
     pub debug: bool,
@@ -108,6 +112,10 @@ impl Default for WebViewBuilder {
             wndproc: Box::new(WebViewDefWindowProc),
             style: WS_OVERLAPPEDWINDOW,
             exstyle: WINDOW_EX_STYLE::default(),
+            x: CW_USEDEFAULT,
+            y: CW_USEDEFAULT,
+            width: CW_USEDEFAULT,
+            height: CW_USEDEFAULT,
             title: "",
             url: "",
             debug: true,
@@ -144,7 +152,7 @@ impl WebViewBuilder {
         }
 
         unsafe {
-            let _ = HiDpi::SetProcessDpiAwareness(HiDpi::PROCESS_PER_MONITOR_DPI_AWARE);
+            HiDpi::SetThreadDpiAwarenessContext(HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
 
         let hwnd = {
@@ -163,15 +171,20 @@ impl WebViewBuilder {
             unsafe {
                 RegisterClassA(&window_class);
 
+                let dpi = HiDpi::GetDpiForSystem();
+                let ratio = dpi as f64 / 96.;
+                let width = self.width as f64 * ratio;
+                let height = self.height as f64 * ratio;
+
                 CreateWindowExA(
                     self.exstyle,
                     class_name,
                     self.title,
                     self.style,
-                    CW_USEDEFAULT,
-                    CW_USEDEFAULT,
-                    CW_USEDEFAULT,
-                    CW_USEDEFAULT,
+                    self.x,
+                    self.y,
+                    width as i32,
+                    height as i32,
                     None,
                     None,
                     None,
@@ -518,6 +531,16 @@ pub fn WebViewDefWindowProc(
             }
             LRESULT::default()
         }
+
+        WM_DPICHANGED => unsafe {
+            let rect = *(lparam.0 as *mut RECT);
+            let x = rect.left;
+            let y = rect.top;
+            let w = rect.right - x;
+            let h = rect.bottom - y;
+            SetWindowPos(hwnd, None, x, y, w, h, Default::default());
+            LRESULT::default()
+        },
 
         WM_CLOSE => {
             unsafe {
