@@ -80,6 +80,15 @@ fn main() -> taco::Result<()> {
         Ok(())
     });
 
+    println!("ままま");
+
+    let (h2, _wvh2) = taco::WebViewBuilder {
+        url: "https://qiita.com/takao_mofumofu/items/24c060a1d4f6b3df5c73",
+        ..Default::default()
+    }
+    .start()?;
+    h2.join().unwrap()?;
+
     // Off we go....
     h.join().unwrap()
 }

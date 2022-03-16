@@ -19,9 +19,8 @@ use windows::{
     core::*,
     Win32::{
         Foundation::{E_POINTER, HWND, LPARAM, LRESULT, PSTR, PWSTR, RECT, SIZE, WPARAM},
-        Graphics::Gdi,
-        System::{Com::*, LibraryLoader, WinRT::EventRegistrationToken},
-        UI::{HiDpi, Input::KeyboardAndMouse, WindowsAndMessaging::*},
+        System::WinRT::EventRegistrationToken,
+        UI::{HiDpi, WindowsAndMessaging::*},
     },
 };
 
@@ -140,9 +139,13 @@ struct InvokeMessage {
 impl WebViewBuilder {
     fn create(mut self) -> Result<HWND> {
         unsafe {
+            use windows::Win32::System::Com::*;
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
         }
-        set_process_dpi_awareness()?;
+
+        unsafe {
+            let _ = HiDpi::SetProcessDpiAwareness(HiDpi::PROCESS_PER_MONITOR_DPI_AWARE);
+        }
 
         let hwnd = {
             let class_name = "WebView";
@@ -171,7 +174,7 @@ impl WebViewBuilder {
                     CW_USEDEFAULT,
                     None,
                     None,
-                    LibraryLoader::GetModuleHandleA(None),
+                    None,
                     ptr::null_mut(),
                 )
             }
@@ -466,25 +469,20 @@ impl WebViewHandle {
     }
 }
 
-fn set_process_dpi_awareness() -> Result<()> {
-    unsafe { HiDpi::SetProcessDpiAwareness(HiDpi::PROCESS_PER_MONITOR_DPI_AWARE)? };
-    Ok(())
-}
-
-extern "system" fn window_proc(hwnd: HWND, msg: u32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
-    let p = unsafe { GetWindowLong(hwnd, GWLP_USERDATA) } as *mut (WndProc, WebView);
+extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let (wndproc, webview) = unsafe {
+        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut (WndProc, WebView);
         if p.is_null() {
             if msg == WM_APP {
                 std::thread::sleep(std::time::Duration::from_millis(1));
-                PostMessageA(hwnd, msg, w_param, l_param);
+                PostMessageA(hwnd, msg, wparam, lparam);
             }
-            return DefWindowProcA(hwnd, msg, w_param, l_param);
+            return DefWindowProcA(hwnd, msg, wparam, lparam);
         }
         (&mut (*p).0, &(*p).1)
     };
 
-    (*wndproc)(hwnd, msg, w_param, l_param, webview)
+    (*wndproc)(hwnd, msg, wparam, lparam, webview)
 }
 
 #[allow(non_snake_case)]
