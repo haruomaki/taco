@@ -24,7 +24,7 @@ fn main() -> taco::Result<()> {
         url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
         ..Default::default()
     }
-    .bind("hostCallback", move |request| {
+    .bind("hostCallback", move |_, request| {
         if let [Value::String(str), Value::Number(a), Value::Number(b)] = &request[..] {
             if str == "Add" {
                 let result = a.as_f64().unwrap_or(0f64) + b.as_f64().unwrap_or(0f64);
@@ -36,7 +36,7 @@ fn main() -> taco::Result<()> {
         }
         Err(r#"Usage: window.hostCallback("Add", a, b)"#.into())
     })
-    .bind("charge", move |request| {
+    .bind("charge", move |_, request| {
         if let [Value::Number(x)] = &request[..] {
             let mut lock = c.lock().unwrap();
             (*lock) += x.as_i64().unwrap();

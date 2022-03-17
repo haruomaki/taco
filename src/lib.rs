@@ -88,7 +88,7 @@ impl Drop for Window {
 
 type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &WebView) -> LRESULT + Send + 'static>;
 type BindingCallback =
-    Box<dyn FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static>;
+    Box<dyn FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String> + Send + 'static>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 pub struct WebViewBuilder {
@@ -129,7 +129,7 @@ impl Default for WebViewBuilder {
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
-    hwnd: HWND,
+    pub hwnd: HWND,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,12 +321,12 @@ impl WebViewBuilder {
                                 let message = take_pwstr(message);
                                 if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
                                     if let Some(f) = self.bindings.get_mut(&value.method) {
-                                        match (*f)(value.params) {
-                                            Ok(result) => resolve(hwnd, value.id, 0, result),
+                                        wvh.dispatch(|webview| match (*f)(webview, value.params) {
+                                            Ok(result) => resolve(webview, value.id, 0, result),
                                             Err(err) => {
-                                                resolve(hwnd, value.id, 1, Value::String(err))
+                                                resolve(webview, value.id, 1, Value::String(err))
                                             }
-                                        }
+                                        })
                                     }
                                 }
                             }
@@ -393,7 +393,7 @@ impl WebViewBuilder {
 
     pub fn bind<F>(mut self, name: &str, f: F) -> Self
     where
-        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
+        F: FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
     {
         self.bindings.insert(String::from(name), Box::new(f));
         self
@@ -425,7 +425,10 @@ impl WebView {
         let mut token = EventRegistrationToken::default();
         unsafe {
             core.NavigationCompleted(handler, &mut token)?;
-            core.Navigate(url)?;
+            if let Err(err) = core.Navigate(url) {
+                core.RemoveNavigationCompleted(token)?;
+                return Err(err.into());
+            }
             webview2_com::wait_with_pump(rx)?;
             core.RemoveNavigationCompleted(token)?;
         }
@@ -607,7 +610,7 @@ where
     unsafe { PostMessageA(hwnd, WM_APP, WPARAM(0), LPARAM(p as _)) };
 }
 
-pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
+pub fn resolve(webview: &WebView, id: u64, status: i32, result: Value) -> Result<()> {
     let result = result.to_string();
     let method = match status {
         0 => "resolve",
@@ -620,7 +623,8 @@ pub fn resolve(hwnd: HWND, id: u64, status: i32, result: Value) {
         id, method, result, id
     );
 
-    dispatch_eval(hwnd, js);
+    webview.eval(&js).unwrap();
+    Ok(())
 }
 
 pub fn dispatch_eval(hwnd: HWND, js: String) {
