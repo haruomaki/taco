@@ -4,11 +4,9 @@ pub extern crate webview2_com;
 pub extern crate windows;
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     ffi::CString,
     fmt, ptr,
-    rc::Rc,
     sync::mpsc,
     thread::{spawn, JoinHandle},
 };
@@ -89,7 +87,8 @@ impl Drop for Window {
 }
 
 type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &WebView) -> LRESULT + Send + 'static>;
-type BindingCallback = Box<dyn FnMut(Vec<Value>) -> std::result::Result<Value, String>>;
+type BindingCallback =
+    Box<dyn FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 pub struct WebViewBuilder {
@@ -104,6 +103,7 @@ pub struct WebViewBuilder {
     pub url: &'static str,
     pub debug: bool,
     pub transparent: bool,
+    pub bindings: BindingsMap,
 }
 
 impl Default for WebViewBuilder {
@@ -120,6 +120,7 @@ impl Default for WebViewBuilder {
             url: "",
             debug: true,
             transparent: false,
+            bindings: HashMap::new(),
         }
     }
 }
@@ -128,7 +129,6 @@ impl Default for WebViewBuilder {
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
-    bindings: Rc<RefCell<BindingsMap>>,
     hwnd: HWND,
 }
 
@@ -272,7 +272,6 @@ impl WebViewBuilder {
             WebView {
                 controller,
                 core,
-                bindings: Rc::new(RefCell::new(HashMap::new())),
                 hwnd,
             },
         ));
@@ -283,7 +282,34 @@ impl WebViewBuilder {
         webview
             .init(r#"window.external = { invoke: s => window.chrome.webview.postMessage(s) };"#)?;
 
-        let bindings = webview.bindings.clone();
+        for name in self.bindings.keys() {
+            let js = String::from(
+                r#"
+            (function() {
+                var name = '"#,
+            ) + name
+                + r#"';
+                var RPC = window._rpc = (window._rpc || {nextSeq: 1});
+                window[name] = function() {
+                    var seq = RPC.nextSeq++;
+                    var promise = new Promise(function(resolve, reject) {
+                        RPC[seq] = {
+                            resolve: resolve,
+                            reject: reject,
+                        };
+                    });
+                    window.external.invoke({
+                        id: seq,
+                        method: name,
+                        params: Array.prototype.slice.call(arguments),
+                    });
+                    return promise;
+                }
+            })()"#;
+
+            webview.init(&js)?;
+        }
+
         unsafe {
             let mut _token = EventRegistrationToken::default();
             webview.core.WebMessageReceived(
@@ -294,8 +320,7 @@ impl WebViewBuilder {
                             if args.WebMessageAsJson(&mut message).is_ok() {
                                 let message = take_pwstr(message);
                                 if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
-                                    let mut bindings = bindings.borrow_mut();
-                                    if let Some(f) = bindings.get_mut(&value.method) {
+                                    if let Some(f) = self.bindings.get_mut(&value.method) {
                                         match (*f)(value.params) {
                                             Ok(result) => resolve(hwnd, value.id, 0, result),
                                             Err(err) => {
@@ -365,6 +390,14 @@ impl WebViewBuilder {
             Err(err) => Err(err),
         }
     }
+
+    pub fn bind<F>(mut self, name: &str, f: F) -> Self
+    where
+        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
+    {
+        self.bindings.insert(String::from(name), Box::new(f));
+        self
+    }
 }
 
 impl WebView {
@@ -410,41 +443,6 @@ impl WebView {
             Box::new(|error_code, _result| error_code),
         )?;
         Ok(self)
-    }
-
-    pub fn bind<F>(&self, name: &str, f: F) -> Result<&Self>
-    where
-        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + 'static,
-    {
-        self.bindings
-            .borrow_mut()
-            .insert(String::from(name), Box::new(f));
-
-        let js = String::from(
-            r#"
-            (function() {
-                var name = '"#,
-        ) + name
-            + r#"';
-                var RPC = window._rpc = (window._rpc || {nextSeq: 1});
-                window[name] = function() {
-                    var seq = RPC.nextSeq++;
-                    var promise = new Promise(function(resolve, reject) {
-                        RPC[seq] = {
-                            resolve: resolve,
-                            reject: reject,
-                        };
-                    });
-                    window.external.invoke({
-                        id: seq,
-                        method: name,
-                        params: Array.prototype.slice.call(arguments),
-                    });
-                    return promise;
-                }
-            })()"#;
-
-        self.init(&js)
     }
 
     // 背景を透明化
