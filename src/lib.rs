@@ -325,10 +325,15 @@ impl WebViewBuilder {
                                 let message = take_pwstr(message);
                                 if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
                                     if let Some(f) = self.bindings.get_mut(&value.method) {
-                                        wvh.dispatch(|webview| match (*f)(webview, value.params) {
-                                            Ok(result) => resolve(webview, value.id, 0, result),
-                                            Err(err) => {
-                                                resolve(webview, value.id, 1, Value::String(err))
+                                        wvh.dispatch(move |webview| {
+                                            match (*f)(webview, value.params) {
+                                                Ok(result) => resolve(webview, value.id, 0, result),
+                                                Err(err) => resolve(
+                                                    webview,
+                                                    value.id,
+                                                    1,
+                                                    Value::String(err),
+                                                ),
                                             }
                                         })
                                     }
