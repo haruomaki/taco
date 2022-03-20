@@ -7,10 +7,23 @@ use taco::windows::Win32::UI::WindowsAndMessaging::*;
 use std::sync::{Arc, Mutex};
 
 fn main() -> taco::Result<()> {
+    std::thread::spawn(|| {
+        let (wvr2, _wvh2) = taco::WebViewBuilder {
+            x: 1,
+            y: 1,
+            width: 300,
+            height: 300,
+            url: "https://qiita.com/takao_mofumofu/items/24c060a1d4f6b3df5c73",
+            ..Default::default()
+        }
+        .build()?;
+        wvr2.run()
+    });
+
     let mut count = 0;
     let counter = Arc::new(Mutex::new(0));
     let c = counter.clone();
-    let (h, _wvh) = taco::WebViewBuilder {
+    let (wvr, _wvh) = taco::WebViewBuilder {
         wndproc: Box::new(move |hwnd, msg, wparam, lparam, webview| match msg {
             WM_KEYDOWN => {
                 webview.eval("console.log('ぴゃあ')").unwrap();
@@ -46,19 +59,8 @@ fn main() -> taco::Result<()> {
 
         Err(r#"Usage: window.charge(x)"#.into())
     })
-    .start()?;
-
-    let (h2, _wvh2) = taco::WebViewBuilder {
-        x: 1,
-        y: 1,
-        width: 300,
-        height: 300,
-        url: "https://qiita.com/takao_mofumofu/items/24c060a1d4f6b3df5c73",
-        ..Default::default()
-    }
-    .start()?;
-    h2.join().unwrap()?;
+    .build()?;
 
     // Off we go....
-    h.join().unwrap()
+    wvr.run()
 }

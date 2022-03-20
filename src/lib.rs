@@ -132,6 +132,10 @@ pub struct WebView {
     pub hwnd: HWND,
 }
 
+pub struct WebViewRunner {
+    pub user_data: Box<(WndProc, WebView)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WebViewHandle {
     pub hwnd: HWND,
@@ -145,7 +149,7 @@ struct InvokeMessage {
 }
 
 impl WebViewBuilder {
-    fn create(mut self) -> Result<HWND> {
+    pub fn build(mut self) -> Result<(WebViewRunner, WebViewHandle)> {
         unsafe {
             use windows::Win32::System::Com::*;
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
@@ -347,48 +351,7 @@ impl WebViewBuilder {
             wvh.show();
         }
 
-        unsafe { SetWindowLong(hwnd, GWLP_USERDATA, Box::into_raw(user_data) as _) };
-
-        Ok(hwnd)
-    }
-
-    pub fn start(self) -> Result<(JoinHandle<Result<()>>, WebViewHandle)> {
-        let (tx, rx) = mpsc::channel();
-        let h = spawn(move || {
-            let result = self.create();
-            match result {
-                Ok(hwnd) => tx.send(Ok(hwnd)).unwrap(),
-                Err(err) => {
-                    tx.send(Err(err)).unwrap();
-                    return Ok(());
-                }
-            }
-
-            let mut msg = MSG::default();
-            let h_wnd = HWND::default();
-
-            loop {
-                unsafe {
-                    let result = GetMessageA(&mut msg, h_wnd, 0, 0).0;
-
-                    match result {
-                        -1 => break Err(windows::core::Error::from_win32().into()),
-                        0 => break Ok(()),
-                        _ => match msg.message {
-                            _ => {
-                                TranslateMessage(&msg);
-                                DispatchMessageA(&msg);
-                            }
-                        },
-                    }
-                }
-            }
-        });
-
-        match rx.recv().unwrap() {
-            Ok(hwnd) => Ok((h, WebViewHandle { hwnd })),
-            Err(err) => Err(err),
-        }
+        Ok((WebViewRunner { user_data }, WebViewHandle { hwnd }))
     }
 
     pub fn bind<F>(mut self, name: &str, f: F) -> Self
@@ -473,6 +436,34 @@ impl WebView {
     }
 }
 
+impl WebViewRunner {
+    pub fn run(self) -> Result<()> {
+        let hwnd = self.user_data.1.hwnd;
+
+        let p = Box::into_raw(self.user_data);
+        unsafe { SetWindowLong(hwnd, GWLP_USERDATA, p as _) };
+
+        let mut msg = MSG::default();
+
+        loop {
+            unsafe {
+                let result = GetMessageA(&mut msg, None, 0, 0).0;
+
+                match result {
+                    -1 => break Err(windows::core::Error::from_win32().into()),
+                    0 => break Ok(()),
+                    _ => match msg.message {
+                        _ => {
+                            TranslateMessage(&msg);
+                            DispatchMessageA(&msg);
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
 impl WebViewHandle {
     pub fn dispatch(&self, f: impl FnOnce(&WebView) -> Result<()>) {
         dispatch(self.hwnd, f)
@@ -487,10 +478,6 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     let (wndproc, webview) = unsafe {
         let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut (WndProc, WebView);
         if p.is_null() {
-            if msg == WM_APP {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                PostMessageA(hwnd, msg, wparam, lparam);
-            }
             return DefWindowProcA(hwnd, msg, wparam, lparam);
         }
         (&mut (*p).0, &(*p).1)
