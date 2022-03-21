@@ -86,12 +86,11 @@ impl Drop for Window {
     }
 }
 
-type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &WebView) -> LRESULT + Send + 'static>;
-type BindingCallback =
-    Box<dyn FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String> + Send + 'static>;
+type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &WebView) -> LRESULT>;
+type BindingCallback = Box<dyn FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
-pub struct WebViewBuilder {
+pub struct WebViewBuilder<'a> {
     pub wndproc: WndProc,
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
@@ -99,14 +98,14 @@ pub struct WebViewBuilder {
     pub y: i32,
     pub width: i32,
     pub height: i32,
-    pub title: &'static str,
-    pub url: &'static str,
+    pub title: &'a str,
+    pub url: &'a str,
     pub debug: bool,
     pub transparent: bool,
     pub bindings: BindingsMap,
 }
 
-impl Default for WebViewBuilder {
+impl<'a> Default for WebViewBuilder<'a> {
     fn default() -> Self {
         Self {
             wndproc: Box::new(WebViewDefWindowProc),
@@ -148,7 +147,7 @@ struct InvokeMessage {
     params: Vec<Value>,
 }
 
-impl WebViewBuilder {
+impl<'a> WebViewBuilder<'a> {
     pub fn build(mut self) -> Result<(WebViewRunner, WebViewHandle)> {
         unsafe {
             use windows::Win32::System::Com::*;
@@ -325,7 +324,7 @@ impl WebViewBuilder {
                                 let message = take_pwstr(message);
                                 if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
                                     if let Some(f) = self.bindings.get_mut(&value.method) {
-                                        wvh.dispatch(move |webview| {
+                                        dispatch_unsafe(hwnd, move |webview| {
                                             match (*f)(webview, value.params) {
                                                 Ok(result) => resolve(webview, value.id, 0, result),
                                                 Err(err) => resolve(
@@ -470,8 +469,8 @@ impl WebViewRunner {
 }
 
 impl WebViewHandle {
-    pub fn dispatch(&self, f: impl FnOnce(&WebView) -> Result<()>) {
-        dispatch(self.hwnd, f)
+    pub fn dispatch(&self, f: impl FnOnce(&WebView) -> Result<()> + Send) {
+        dispatch_unsafe(self.hwnd, f)
     }
 
     pub fn show(&self) {
@@ -591,7 +590,7 @@ unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
     GetWindowLongPtrA(window, index)
 }
 
-pub fn dispatch<F>(hwnd: HWND, f: F)
+pub fn dispatch_unsafe<F>(hwnd: HWND, f: F)
 where
     F: FnOnce(&WebView) -> Result<()>,
     // pub fn my_dispatch(hwnd: HWND, f: dyn FnOnce(&WebView))
@@ -620,7 +619,7 @@ pub fn resolve(webview: &WebView, id: u64, status: i32, result: Value) -> Result
 }
 
 pub fn dispatch_eval(hwnd: HWND, js: String) {
-    dispatch(hwnd, move |webview| {
+    dispatch_unsafe(hwnd, move |webview| {
         webview.eval(&js)?;
         Ok(())
     });
