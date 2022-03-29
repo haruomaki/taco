@@ -3,13 +3,7 @@ pub extern crate serde_json;
 pub extern crate webview2_com;
 pub extern crate windows;
 
-use std::{
-    collections::HashMap,
-    ffi::CString,
-    fmt, ptr,
-    sync::mpsc,
-    thread::{spawn, JoinHandle},
-};
+use std::{collections::HashMap, ffi::CString, fmt, ptr, sync::mpsc};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -101,6 +95,8 @@ pub struct WebViewBuilder<'a> {
     pub title: &'a str,
     pub url: &'a str,
     pub debug: bool,
+    pub frameless: bool,
+    pub resizable: bool,
     pub transparent: bool,
     pub bindings: BindingsMap,
 }
@@ -118,6 +114,8 @@ impl<'a> Default for WebViewBuilder<'a> {
             title: "",
             url: "",
             debug: true,
+            frameless: false,
+            resizable: true,
             transparent: false,
             bindings: HashMap::new(),
         }
@@ -166,6 +164,15 @@ impl<'a> WebViewBuilder<'a> {
                 lpszClassName: PSTR(c_class_name.as_ptr() as *mut _),
                 ..WNDCLASSA::default()
             };
+
+            if self.frameless {
+                self.style &= !WS_OVERLAPPEDWINDOW;
+                self.style |= WS_POPUP | WS_THICKFRAME;
+            }
+
+            if !self.resizable {
+                self.style &= !WS_THICKFRAME;
+            }
 
             if self.transparent {
                 self.exstyle |= WS_EX_LAYERED
@@ -437,6 +444,40 @@ impl WebView {
             t.DefaultBackgroundColor(&mut backgroundcolor).unwrap();
         }
         println!("{:?}", backgroundcolor);
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) -> Result<&Self> {
+        unsafe {
+            SetWindowPos(self.hwnd, None, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
+        Ok(self)
+    }
+
+    pub fn set_visible(&self, visible: bool) -> Result<&Self> {
+        unsafe {
+            ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        }
+        Ok(self)
+    }
+
+    pub fn set_topmost(&self, topmost: bool) -> Result<&Self> {
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                if topmost {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                },
+                0,
+                0,
+                0,
+                0,
+                // SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                SWP_NOMOVE | SWP_NOSIZE,
+            );
+        }
+        Ok(self)
     }
 }
 
