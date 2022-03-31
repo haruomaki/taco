@@ -17,4 +17,5 @@ features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
 ]

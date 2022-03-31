@@ -10,7 +10,10 @@ use serde_json::Value;
 use windows::{
     core::*,
     Win32::{
-        Foundation::{E_POINTER, HWND, LPARAM, LRESULT, PSTR, PWSTR, RECT, SIZE, WPARAM},
+        Foundation::{
+            E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, PSTR, PWSTR, RECT, SIZE, WPARAM,
+        },
+        System::LibraryLoader::GetModuleHandleA,
         System::WinRT::EventRegistrationToken,
         UI::{HiDpi, WindowsAndMessaging::*},
     },
@@ -127,6 +130,7 @@ pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
     pub hwnd: HWND,
+    pub hinstance: HINSTANCE,
 }
 
 pub struct WebViewRunner {
@@ -155,6 +159,8 @@ impl<'a> WebViewBuilder<'a> {
         unsafe {
             HiDpi::SetThreadDpiAwarenessContext(HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
+
+        let hinstance = unsafe { GetModuleHandleA(None) };
 
         let hwnd = {
             let class_name = "WebView";
@@ -197,7 +203,7 @@ impl<'a> WebViewBuilder<'a> {
                     height as i32,
                     None,
                     None,
-                    None,
+                    hinstance,
                     ptr::null_mut(),
                 )
             }
@@ -283,6 +289,7 @@ impl<'a> WebViewBuilder<'a> {
                 controller,
                 core,
                 hwnd,
+                hinstance,
             },
         ));
 
