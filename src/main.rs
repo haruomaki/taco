@@ -1,7 +1,6 @@
 // #![windows_subsystem = "windows"]
 
 use taco::serde_json::{Number, Value};
-use taco::window;
 use taco::windows::Win32::Foundation::LRESULT;
 use taco::windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -13,7 +12,7 @@ use std::{
 
 fn main() -> taco::Result<()> {
     std::thread::spawn(|| {
-        let (webview2, _whandle2) = taco::WebViewBuilder {
+        let (webview2, wrun2, _whandle2) = taco::WebViewBuilder {
             x: 1,
             y: 1,
             width: 300,
@@ -21,9 +20,8 @@ fn main() -> taco::Result<()> {
             url: "https://qiita.com/takao_mofumofu/items/24c060a1d4f6b3df5c73",
             ..Default::default()
         }
-        .build::<()>()?;
-        window::run(
-            webview2.hwnd,
+        .build()?;
+        wrun2.run(
             move |hwnd, msg, wparam, lparam| {
                 taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, &webview2)
             },
@@ -34,7 +32,7 @@ fn main() -> taco::Result<()> {
     let mut count = 0;
     let counter = Arc::new(Mutex::new(0));
     let c = counter.clone();
-    let (webview, whandle) = taco::WebViewBuilder {
+    let (webview, wrun, whandle) = taco::WebViewBuilder {
         title: "たいとるです",
         url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
         ..Default::default()
@@ -61,7 +59,7 @@ fn main() -> taco::Result<()> {
 
         Err(r#"Usage: window.charge(x)"#.into())
     })
-    .build::<i32>()?;
+    .build()?;
 
     spawn(move || {
         // スレッドアンセーフな共有
@@ -98,8 +96,7 @@ fn main() -> taco::Result<()> {
 
     let mut webview_clone = webview.clone();
     // Off we go....
-    window::run(
-        webview.hwnd,
+    wrun.run(
         move |hwnd, msg, wparam, lparam| {
             let webview = &mut webview_clone;
             match msg {

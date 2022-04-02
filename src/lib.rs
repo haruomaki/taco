@@ -5,19 +5,16 @@ pub extern crate windows;
 
 pub mod window;
 
-use std::{collections::HashMap, ffi::CString, fmt, ptr, sync::mpsc};
+use std::{collections::HashMap, fmt, ptr, sync::mpsc};
 
 use serde::Deserialize;
 use serde_json::Value;
 use windows::{
     core::*,
     Win32::{
-        Foundation::{
-            E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, PSTR, PWSTR, RECT, SIZE, WPARAM,
-        },
-        System::LibraryLoader::GetModuleHandleA,
+        Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, PWSTR, RECT, SIZE, WPARAM},
         System::WinRT::EventRegistrationToken,
-        UI::{HiDpi, WindowsAndMessaging::*},
+        UI::WindowsAndMessaging::*,
     },
 };
 
@@ -130,64 +127,40 @@ struct InvokeMessage {
 }
 
 impl<'a> WebViewBuilder<'a> {
-    pub fn build<T>(mut self) -> Result<(WebView, window::WindowHandle<T>)> {
+    pub fn build<T>(
+        mut self,
+    ) -> Result<(WebView, window::WindowRunner<T>, window::WindowHandle<T>)> {
         unsafe {
             use windows::Win32::System::Com::*;
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
         }
 
-        unsafe {
-            HiDpi::SetThreadDpiAwarenessContext(HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        if self.frameless {
+            self.style &= !WS_OVERLAPPEDWINDOW;
+            self.style |= WS_POPUP | WS_THICKFRAME;
         }
 
-        let hinstance = unsafe { GetModuleHandleA(None) };
+        if !self.resizable {
+            self.style &= !WS_THICKFRAME;
+        }
 
-        let hwnd = {
-            let class_name = "WebView";
-            let c_class_name = CString::new(class_name).expect("lpszClassName");
-            let window_class = WNDCLASSA {
-                lpfnWndProc: Some(window::wndproc),
-                lpszClassName: PSTR(c_class_name.as_ptr() as *mut _),
-                ..WNDCLASSA::default()
-            };
+        if self.transparent {
+            self.exstyle |= WS_EX_LAYERED
+        }
 
-            if self.frameless {
-                self.style &= !WS_OVERLAPPEDWINDOW;
-                self.style |= WS_POPUP | WS_THICKFRAME;
-            }
+        let (wrun, whandle) = window::create_window(
+            self.style,
+            self.exstyle,
+            "WebView",
+            self.title,
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+        );
 
-            if !self.resizable {
-                self.style &= !WS_THICKFRAME;
-            }
-
-            if self.transparent {
-                self.exstyle |= WS_EX_LAYERED
-            }
-
-            unsafe {
-                RegisterClassA(&window_class);
-
-                let dpi = HiDpi::GetDpiForSystem();
-                let ratio = dpi as f64 / 96.;
-                let width = self.width as f64 * ratio;
-                let height = self.height as f64 * ratio;
-
-                CreateWindowExA(
-                    self.exstyle,
-                    class_name,
-                    self.title,
-                    self.style,
-                    self.x,
-                    self.y,
-                    width as i32,
-                    height as i32,
-                    None,
-                    None,
-                    hinstance,
-                    ptr::null_mut(),
-                )
-            }
-        };
+        let hwnd = whandle.hwnd;
+        let hinstance = whandle.hinstance;
 
         let environment = {
             let (tx, rx) = mpsc::channel();
@@ -343,7 +316,7 @@ impl<'a> WebViewBuilder<'a> {
             webview.navigate(self.url)?.set_visible(true)?;
         }
 
-        Ok((webview, window::WindowHandle::new(hwnd)))
+        Ok((webview, wrun, whandle))
     }
 
     pub fn bind<F>(mut self, name: &str, f: F) -> Self
