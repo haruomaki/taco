@@ -3,6 +3,8 @@ pub extern crate serde_json;
 pub extern crate webview2_com;
 pub extern crate windows;
 
+pub mod window;
+
 use std::{collections::HashMap, ffi::CString, fmt, ptr, sync::mpsc};
 
 use serde::Deserialize;
@@ -73,22 +75,10 @@ impl<'a, T: 'a> From<std::sync::TryLockError<T>> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-struct Window(HWND);
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        unsafe {
-            DestroyWindow(self.0);
-        }
-    }
-}
-
-type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &WebView) -> LRESULT>;
 type BindingCallback = Box<dyn FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 pub struct WebViewBuilder<'a> {
-    pub wndproc: WndProc,
     pub style: WINDOW_STYLE,
     pub exstyle: WINDOW_EX_STYLE,
     pub x: i32,
@@ -107,7 +97,6 @@ pub struct WebViewBuilder<'a> {
 impl<'a> Default for WebViewBuilder<'a> {
     fn default() -> Self {
         Self {
-            wndproc: Box::new(WebViewDefWindowProc),
             style: WS_OVERLAPPEDWINDOW,
             exstyle: WINDOW_EX_STYLE::default(),
             x: CW_USEDEFAULT,
@@ -125,21 +114,12 @@ impl<'a> Default for WebViewBuilder<'a> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
     pub hwnd: HWND,
     pub hinstance: HINSTANCE,
-}
-
-pub struct WebViewRunner {
-    pub user_data: Box<(WndProc, WebView)>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WebViewHandle {
-    pub hwnd: HWND,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,7 +130,7 @@ struct InvokeMessage {
 }
 
 impl<'a> WebViewBuilder<'a> {
-    pub fn build(mut self) -> Result<(WebViewRunner, WebViewHandle)> {
+    pub fn build<T>(mut self) -> Result<(WebView, window::WindowHandle<T>)> {
         unsafe {
             use windows::Win32::System::Com::*;
             CoInitializeEx(ptr::null_mut(), COINIT_APARTMENTTHREADED)?;
@@ -166,7 +146,7 @@ impl<'a> WebViewBuilder<'a> {
             let class_name = "WebView";
             let c_class_name = CString::new(class_name).expect("lpszClassName");
             let window_class = WNDCLASSA {
-                lpfnWndProc: Some(window_proc),
+                lpfnWndProc: Some(window::wndproc),
                 lpszClassName: PSTR(c_class_name.as_ptr() as *mut _),
                 ..WNDCLASSA::default()
             };
@@ -208,8 +188,6 @@ impl<'a> WebViewBuilder<'a> {
                 )
             }
         };
-
-        let wvh = WebViewHandle { hwnd };
 
         let environment = {
             let (tx, rx) = mpsc::channel();
@@ -283,17 +261,12 @@ impl<'a> WebViewBuilder<'a> {
             }
         }
 
-        let user_data = Box::new((
-            self.wndproc,
-            WebView {
-                controller,
-                core,
-                hwnd,
-                hinstance,
-            },
-        ));
-
-        let webview = &user_data.1;
+        let webview = WebView {
+            controller,
+            core,
+            hwnd,
+            hinstance,
+        };
 
         // Inject the invoke handler.
         webview
@@ -328,6 +301,7 @@ impl<'a> WebViewBuilder<'a> {
         }
 
         unsafe {
+            let webview_clone = webview.clone();
             let mut _token = EventRegistrationToken::default();
             webview.core.WebMessageReceived(
                 WebMessageReceivedEventHandler::create(Box::new(
@@ -338,7 +312,8 @@ impl<'a> WebViewBuilder<'a> {
                                 let message = take_pwstr(message);
                                 if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
                                     if let Some(f) = self.bindings.get_mut(&value.method) {
-                                        dispatch_unsafe(hwnd, move |webview| {
+                                        let webview = &webview_clone;
+                                        window::dispatch_unsafe(hwnd, move |_: &T| {
                                             match (*f)(webview, value.params) {
                                                 Ok(result) => resolve(webview, value.id, 0, result),
                                                 Err(err) => resolve(
@@ -365,11 +340,10 @@ impl<'a> WebViewBuilder<'a> {
         }
 
         if !self.url.is_empty() {
-            webview.navigate(self.url)?;
-            wvh.show();
+            webview.navigate(self.url)?.set_visible(true)?;
         }
 
-        Ok((WebViewRunner { user_data }, WebViewHandle { hwnd }))
+        Ok((webview, window::WindowHandle::new(hwnd)))
     }
 
     pub fn bind<F>(mut self, name: &str, f: F) -> Self
@@ -488,56 +462,6 @@ impl WebView {
     }
 }
 
-impl WebViewRunner {
-    pub fn run(self) -> Result<()> {
-        let hwnd = self.user_data.1.hwnd;
-
-        let p = Box::into_raw(self.user_data);
-        unsafe { SetWindowLong(hwnd, GWLP_USERDATA, p as _) };
-
-        let mut msg = MSG::default();
-
-        loop {
-            unsafe {
-                let result = GetMessageA(&mut msg, None, 0, 0).0;
-
-                match result {
-                    -1 => break Err(windows::core::Error::from_win32().into()),
-                    0 => break Ok(()),
-                    _ => match msg.message {
-                        _ => {
-                            TranslateMessage(&msg);
-                            DispatchMessageA(&msg);
-                        }
-                    },
-                }
-            }
-        }
-    }
-}
-
-impl WebViewHandle {
-    pub fn dispatch(&self, f: impl FnOnce(&WebView) -> Result<()> + Send) {
-        dispatch_unsafe(self.hwnd, f)
-    }
-
-    pub fn show(&self) {
-        unsafe { ShowWindow(self.hwnd, SW_SHOW) };
-    }
-}
-
-extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let (wndproc, webview) = unsafe {
-        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut (WndProc, WebView);
-        if p.is_null() {
-            return DefWindowProcA(hwnd, msg, wparam, lparam);
-        }
-        (&mut (*p).0, &(*p).1)
-    };
-
-    (*wndproc)(hwnd, msg, wparam, lparam, webview)
-}
-
 #[allow(non_snake_case)]
 pub fn WebViewDefWindowProc(
     hwnd: HWND,
@@ -547,15 +471,6 @@ pub fn WebViewDefWindowProc(
     webview: &WebView,
 ) -> LRESULT {
     match msg {
-        WM_APP => {
-            let p = lparam.0 as *mut Box<dyn FnOnce(&WebView) -> Result<()>>;
-            unsafe {
-                let fbb = Box::from_raw(p);
-                (*fbb)(webview).unwrap();
-            }
-            LRESULT::default()
-        }
-
         WM_SIZE => {
             let size = get_window_size(hwnd);
             unsafe {
@@ -572,36 +487,7 @@ pub fn WebViewDefWindowProc(
             LRESULT::default()
         }
 
-        WM_DPICHANGED => unsafe {
-            let rect = *(lparam.0 as *mut RECT);
-            let x = rect.left;
-            let y = rect.top;
-            let w = rect.right - x;
-            let h = rect.bottom - y;
-            SetWindowPos(hwnd, None, x, y, w, h, Default::default());
-            LRESULT::default()
-        },
-
-        WM_CLOSE => {
-            unsafe {
-                DestroyWindow(hwnd);
-            }
-            LRESULT::default()
-        }
-
-        WM_DESTROY => {
-            // webview.terminate().expect("window is gone");
-            unsafe { PostQuitMessage(0) };
-            LRESULT::default()
-        }
-
-        WM_NCDESTROY => unsafe {
-            let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut (WndProc, WebView);
-            let _user_data = Box::from_raw(p);
-            LRESULT::default()
-        },
-
-        _ => unsafe { DefWindowProcA(hwnd, msg, wparam, lparam) },
+        _ => window::DefWindowProc(hwnd, msg, wparam, lparam),
     }
 }
 
@@ -638,17 +524,6 @@ unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
     GetWindowLongPtrA(window, index)
 }
 
-pub fn dispatch_unsafe<F>(hwnd: HWND, f: F)
-where
-    F: FnOnce(&WebView) -> Result<()>,
-    // pub fn my_dispatch(hwnd: HWND, f: dyn FnOnce(&WebView))
-{
-    let fb = Box::new(f) as Box<dyn FnOnce(&WebView) -> Result<()>>;
-    let fbb = Box::new(fb);
-    let p = Box::into_raw(fbb);
-    unsafe { PostMessageA(hwnd, WM_APP, WPARAM(0), LPARAM(p as _)) };
-}
-
 pub fn resolve(webview: &WebView, id: u64, status: i32, result: Value) -> Result<()> {
     let result = result.to_string();
     let method = match status {
@@ -664,13 +539,6 @@ pub fn resolve(webview: &WebView, id: u64, status: i32, result: Value) -> Result
 
     webview.eval(&js).unwrap();
     Ok(())
-}
-
-pub fn dispatch_eval(hwnd: HWND, js: String) {
-    dispatch_unsafe(hwnd, move |webview| {
-        webview.eval(&js)?;
-        Ok(())
-    });
 }
 
 pub fn adjust_to_content(hwnd: HWND, body_scroll_width: i32, body_scroll_height: i32) {

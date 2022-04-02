@@ -8,52 +8,27 @@ use windows::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-struct UserData<T> {
-    wndproc: Box<dyn FnMut(HWND, u32, WPARAM, LPARAM, &mut T) -> LRESULT>,
-    luggage: T,
-}
-
-struct Gift<T> {
-    f: Box<dyn FnOnce(&mut T) -> Result<()>>,
-}
+type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowHandle<T> {
-    pub hwnd: HWND,
-    pub luggage_type: PhantomData<T>,
+    hwnd: HWND,
+    luggage_type: PhantomData<fn() -> T>,
 }
 
-pub extern "system" fn window_proc<T>(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut UserData<T>;
+        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut WndProc;
         match p.as_mut() {
-            Some(UserData { wndproc, luggage }) => wndproc(hwnd, msg, wparam, lparam, luggage),
+            Some(f) => f(hwnd, msg, wparam, lparam),
             None => DefWindowProcA(hwnd, msg, wparam, lparam),
         }
     }
 }
 
 #[allow(non_snake_case)]
-pub fn DefWindowProc<T>(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    luggage: &mut T,
-) -> LRESULT {
+pub fn DefWindowProc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        WM_APP => unsafe {
-            let p = lparam.0 as *mut Gift<T>;
-            let gift = Box::from_raw(p);
-            (gift.f)(luggage).unwrap();
-            LRESULT::default()
-        },
-
         WM_DPICHANGED => unsafe {
             let rect = *(lparam.0 as *mut RECT);
             let x = rect.left;
@@ -74,24 +49,28 @@ pub fn DefWindowProc<T>(
             LRESULT::default()
         },
 
-        WM_NCDESTROY => unsafe {
-            let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut UserData<T>;
-            let _ = Box::from_raw(p);
-            LRESULT::default()
-        },
-
         _ => unsafe { DefWindowProcA(hwnd, msg, wparam, lparam) },
     }
 }
 
 pub fn run<T>(
     hwnd: HWND,
-    wndproc: impl FnMut(HWND, u32, WPARAM, LPARAM, &mut T) -> LRESULT + 'static,
+    mut wndproc: impl FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     luggage: T,
 ) -> Result<()> {
-    let wndproc = Box::new(wndproc) as _;
-    let user_data = Box::new(UserData { wndproc, luggage });
-    let p = Box::into_raw(user_data);
+    let f = move |hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM| {
+        if msg == WM_APP {
+            unsafe {
+                let p = lparam.0 as *mut Box<dyn FnOnce(&T) -> Result<()>>;
+                let f = Box::from_raw(p);
+                f(&luggage).unwrap();
+            }
+        }
+        wndproc(hwnd, msg, wparam, lparam)
+    };
+
+    let mut f = Box::new(f) as Box<dyn FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT>;
+    let p = &mut f as *mut Box<dyn FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT>;
     unsafe { SetWindowLong(hwnd, GWLP_USERDATA, p as _) };
 
     let mut msg = MSG::default();
@@ -114,15 +93,22 @@ pub fn run<T>(
     }
 }
 
-pub fn dispatch_unsafe<T>(hwnd: HWND, f: impl FnOnce(&mut T) -> Result<()> + 'static) {
-    let f = Box::new(f) as _;
-    let gift = Box::new(Gift::<T> { f });
-    let p = Box::into_raw(gift);
+pub fn dispatch_unsafe<T>(hwnd: HWND, f: impl FnOnce(&T) -> Result<()>) {
+    let f = Box::new(f) as Box<dyn FnOnce(&T) -> Result<()>>;
+    let f = Box::new(f);
+    let p = Box::into_raw(f);
     unsafe { PostMessageA(hwnd, WM_APP, WPARAM(0), LPARAM(p as _)) };
 }
 
 impl<T> WindowHandle<T> {
-    pub fn dispatch(&self, f: impl FnOnce(&mut T) -> Result<()> + 'static) {
+    pub fn dispatch(&self, f: impl FnOnce(&T) -> Result<()>) {
         dispatch_unsafe(self.hwnd, f)
+    }
+
+    pub fn new(hwnd: HWND) -> Self {
+        Self {
+            hwnd,
+            luggage_type: PhantomData,
+        }
     }
 }

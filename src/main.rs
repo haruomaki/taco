@@ -1,6 +1,7 @@
 // #![windows_subsystem = "windows"]
 
 use taco::serde_json::{Number, Value};
+use taco::window;
 use taco::windows::Win32::Foundation::LRESULT;
 use taco::windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -12,7 +13,7 @@ use std::{
 
 fn main() -> taco::Result<()> {
     std::thread::spawn(|| {
-        let (wvr2, _wvh2) = taco::WebViewBuilder {
+        let (webview2, _whandle2) = taco::WebViewBuilder {
             x: 1,
             y: 1,
             width: 300,
@@ -20,23 +21,20 @@ fn main() -> taco::Result<()> {
             url: "https://qiita.com/takao_mofumofu/items/24c060a1d4f6b3df5c73",
             ..Default::default()
         }
-        .build()?;
-        wvr2.run()
+        .build::<()>()?;
+        window::run(
+            webview2.hwnd,
+            move |hwnd, msg, wparam, lparam| {
+                taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, &webview2)
+            },
+            (),
+        )
     });
 
     let mut count = 0;
     let counter = Arc::new(Mutex::new(0));
     let c = counter.clone();
-    let (wvr, wvh) = taco::WebViewBuilder {
-        wndproc: Box::new(move |hwnd, msg, wparam, lparam, webview| match msg {
-            WM_KEYDOWN => {
-                webview.eval("console.log('ぴゃあ')").unwrap();
-                count += 1;
-                println!("かー {}", count);
-                LRESULT::default()
-            }
-            _ => taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, webview),
-        }),
+    let (webview, whandle) = taco::WebViewBuilder {
         title: "たいとるです",
         url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
         ..Default::default()
@@ -63,7 +61,7 @@ fn main() -> taco::Result<()> {
 
         Err(r#"Usage: window.charge(x)"#.into())
     })
-    .build()?;
+    .build::<i32>()?;
 
     spawn(move || {
         // スレッドアンセーフな共有
@@ -84,8 +82,8 @@ fn main() -> taco::Result<()> {
         for _ in 0..1_000 {
             *count.lock().unwrap() += 1;
             let c = count.clone();
-            wvh.dispatch(move |_| {
-                *c.lock().unwrap() += 1;
+            whandle.dispatch(move |x| {
+                *c.lock().unwrap() += 1 + *x;
                 Ok(())
             });
         }
@@ -98,6 +96,22 @@ fn main() -> taco::Result<()> {
         // });
     });
 
+    let mut webview_clone = webview.clone();
     // Off we go....
-    wvr.run()
+    window::run(
+        webview.hwnd,
+        move |hwnd, msg, wparam, lparam| {
+            let webview = &mut webview_clone;
+            match msg {
+                WM_KEYDOWN => {
+                    webview.eval("console.log('ぴゃあ')").unwrap();
+                    count += 1;
+                    println!("かー {}", count);
+                    LRESULT::default()
+                }
+                _ => taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, webview),
+            }
+        },
+        88888,
+    )
 }
