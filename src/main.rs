@@ -1,7 +1,6 @@
 // #![windows_subsystem = "windows"]
 
 use taco::serde_json::{Number, Value};
-use taco::windows::Win32::Foundation::LRESULT;
 use taco::windows::Win32::UI::WindowsAndMessaging::*;
 
 use std::sync::{Arc, Mutex};
@@ -12,7 +11,7 @@ use std::{
 
 fn main() -> taco::Result<()> {
     std::thread::spawn(|| {
-        let (webview2, wrun2, _whandle2) = taco::WebViewBuilder {
+        let (_webview2, wrun2, _whandle2) = taco::WebViewBuilder {
             x: 1,
             y: 1,
             width: 300,
@@ -21,18 +20,13 @@ fn main() -> taco::Result<()> {
             ..Default::default()
         }
         .build()?;
-        wrun2.run(
-            move |hwnd, msg, wparam, lparam| {
-                taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, &webview2)
-            },
-            (),
-        )
+        wrun2.run(())
     });
 
     let mut count = 0;
     let counter = Arc::new(Mutex::new(0));
     let c = counter.clone();
-    let (webview, wrun, whandle) = taco::WebViewBuilder {
+    let (webview, mut wrun, whandle) = taco::WebViewBuilder {
         title: "たいとるです",
         url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
         ..Default::default()
@@ -94,21 +88,12 @@ fn main() -> taco::Result<()> {
         // });
     });
 
-    let mut webview_clone = webview.clone();
+    wrun.add_event_listener(WM_KEYDOWN, move |_, _| {
+        webview.eval("console.log('ぴゃあ')").unwrap();
+        count += 1;
+        println!("かー {}", count);
+    });
+
     // Off we go....
-    wrun.run(
-        move |hwnd, msg, wparam, lparam| {
-            let webview = &mut webview_clone;
-            match msg {
-                WM_KEYDOWN => {
-                    webview.eval("console.log('ぴゃあ')").unwrap();
-                    count += 1;
-                    println!("かー {}", count);
-                    LRESULT::default()
-                }
-                _ => taco::WebViewDefWindowProc(hwnd, msg, wparam, lparam, webview),
-            }
-        },
-        88888,
-    )
+    wrun.run(88888)
 }

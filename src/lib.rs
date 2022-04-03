@@ -12,7 +12,7 @@ use serde_json::Value;
 use windows::{
     core::*,
     Win32::{
-        Foundation::{E_POINTER, HINSTANCE, HWND, LPARAM, LRESULT, PWSTR, RECT, SIZE, WPARAM},
+        Foundation::{E_POINTER, HINSTANCE, HWND, PWSTR, RECT, SIZE},
         System::WinRT::EventRegistrationToken,
         UI::WindowsAndMessaging::*,
     },
@@ -127,7 +127,7 @@ struct InvokeMessage {
 }
 
 impl<'a> WebViewBuilder<'a> {
-    pub fn build<T>(
+    pub fn build<T: 'static>(
         mut self,
     ) -> Result<(WebView, window::WindowRunner<T>, window::WindowHandle<T>)> {
         unsafe {
@@ -148,7 +148,7 @@ impl<'a> WebViewBuilder<'a> {
             self.exstyle |= WS_EX_LAYERED
         }
 
-        let (wrun, whandle) = window::create_window(
+        let (mut wrun, whandle) = window::create_window(
             self.style,
             self.exstyle,
             "WebView",
@@ -308,6 +308,21 @@ impl<'a> WebViewBuilder<'a> {
             )?;
         }
 
+        let w = webview.clone();
+        wrun.add_event_listener(WM_SIZE, move |_, _| {
+            let size = get_window_size(hwnd);
+            unsafe {
+                w.controller
+                    .SetBounds(RECT {
+                        left: 0,
+                        top: 0,
+                        right: size.cx,
+                        bottom: size.cy,
+                    })
+                    .unwrap();
+            }
+        });
+
         if self.transparent {
             webview.bg();
         }
@@ -432,35 +447,6 @@ impl WebView {
             );
         }
         Ok(self)
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn WebViewDefWindowProc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    webview: &WebView,
-) -> LRESULT {
-    match msg {
-        WM_SIZE => {
-            let size = get_window_size(hwnd);
-            unsafe {
-                webview
-                    .controller
-                    .SetBounds(RECT {
-                        left: 0,
-                        top: 0,
-                        right: size.cx,
-                        bottom: size.cy,
-                    })
-                    .unwrap();
-            }
-            LRESULT::default()
-        }
-
-        _ => window::DefWindowProc(hwnd, msg, wparam, lparam),
     }
 }
 

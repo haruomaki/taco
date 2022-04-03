@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::{GetWindowLong, SetWindowLong};
 
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr::null;
@@ -12,10 +13,11 @@ use windows::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-type WndProc = Box<dyn FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT>;
+type WndProcs = HashMap<u32, Vec<Box<dyn FnMut(WPARAM, LPARAM)>>>;
 
 pub struct WindowRunner<T> {
     hwnd: HWND,
+    wndprocs: WndProcs,
     luggage_type: PhantomData<fn() -> T>,
 }
 
@@ -28,60 +30,27 @@ pub struct WindowHandle<T> {
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut WndProc;
-        match p.as_mut() {
-            Some(f) => f(hwnd, msg, wparam, lparam),
-            None => DefWindowProcA(hwnd, msg, wparam, lparam),
-        }
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn DefWindowProc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_DPICHANGED => unsafe {
-            let rect = *(lparam.0 as *mut RECT);
-            let x = rect.left;
-            let y = rect.top;
-            let w = rect.right - x;
-            let h = rect.bottom - y;
-            SetWindowPos(hwnd, None, x, y, w, h, Default::default());
-            LRESULT::default()
-        },
-
-        WM_CLOSE => unsafe {
-            DestroyWindow(hwnd);
-            LRESULT::default()
-        },
-
-        WM_DESTROY => unsafe {
-            PostQuitMessage(0);
-            LRESULT::default()
-        },
-
-        _ => unsafe { DefWindowProcA(hwnd, msg, wparam, lparam) },
-    }
-}
-
-impl<T> WindowRunner<T> {
-    pub fn run(
-        self,
-        mut wndproc: impl FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT,
-        luggage: T,
-    ) -> Result<()> {
-        let f = move |hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM| {
-            if msg == WM_APP {
-                unsafe {
-                    let p = lparam.0 as *mut Box<dyn FnOnce(&T) -> Result<()>>;
-                    let f = Box::from_raw(p);
-                    f(&luggage).unwrap();
+        let p = GetWindowLong(hwnd, GWLP_USERDATA) as *mut WndProcs;
+        if let Some(wndprocs) = p.as_mut() {
+            if let Some(fs) = wndprocs.get_mut(&msg) {
+                for f in fs.iter_mut() {
+                    f(wparam, lparam);
                 }
+                return LRESULT::default();
             }
-            wndproc(hwnd, msg, wparam, lparam)
-        };
+        }
+        DefWindowProcA(hwnd, msg, wparam, lparam)
+    }
+}
 
-        let mut f = Box::new(f) as Box<dyn FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT>;
-        let p = &mut f as *mut Box<dyn FnMut(HWND, u32, WPARAM, LPARAM) -> LRESULT>;
+impl<T: 'static> WindowRunner<T> {
+    pub fn run(mut self, luggage: T) -> Result<()> {
+        self.add_event_listener(WM_APP, move |_, lparam| unsafe {
+            let p = lparam.0 as *mut Box<dyn FnOnce(&T) -> Result<()>>;
+            let f = Box::from_raw(p);
+            f(&luggage).unwrap();
+        });
+        let p = &mut self.wndprocs as *mut WndProcs;
         unsafe { SetWindowLong(self.hwnd, GWLP_USERDATA, p as _) };
 
         let mut msg = MSG::default();
@@ -103,6 +72,19 @@ impl<T> WindowRunner<T> {
             }
         }
     }
+
+    pub fn add_event_listener(&mut self, msg: u32, f: impl FnMut(WPARAM, LPARAM) + 'static) {
+        if !self.wndprocs.contains_key(&msg) {
+            self.wndprocs.insert(msg, Vec::new());
+        }
+        let fs = self.wndprocs.get_mut(&msg).unwrap();
+        let f = Box::new(f) as _;
+        fs.push(f);
+    }
+
+    pub fn reset_event_listeners(&mut self, msg: u32) {
+        self.wndprocs.remove(&msg);
+    }
 }
 
 pub fn dispatch_unsafe<T>(hwnd: HWND, f: impl FnOnce(&T) -> Result<()>) {
@@ -118,7 +100,7 @@ impl<T> WindowHandle<T> {
     }
 }
 
-pub fn create_window<T>(
+pub fn create_window<T: 'static>(
     style: WINDOW_STYLE,
     exstyle: WINDOW_EX_STYLE,
     class_name: &str,
@@ -165,10 +147,29 @@ pub fn create_window<T>(
         )
     };
 
-    let wrun = WindowRunner {
+    let mut wrun = WindowRunner {
         hwnd,
+        wndprocs: HashMap::new(),
         luggage_type: PhantomData,
     };
+
+    // wrun.add_event_listener(msg, f)
+    wrun.add_event_listener(WM_DPICHANGED, move |_, lparam| unsafe {
+        let rect = *(lparam.0 as *mut RECT);
+        let x = rect.left;
+        let y = rect.top;
+        let w = rect.right - x;
+        let h = rect.bottom - y;
+        SetWindowPos(hwnd, None, x, y, w, h, Default::default());
+    });
+
+    wrun.add_event_listener(WM_CLOSE, move |_, _| unsafe {
+        DestroyWindow(hwnd);
+    });
+
+    wrun.add_event_listener(WM_DESTROY, |_, _| unsafe {
+        PostQuitMessage(0);
+    });
 
     let whandle = WindowHandle {
         hwnd,
