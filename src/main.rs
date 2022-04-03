@@ -56,13 +56,13 @@ fn main() -> taco::Result<()> {
     .build()?;
 
     spawn(move || {
-        // スレッドアンセーフな共有
+        // // スレッドアンセーフな共有
         // let count = std::rc::Rc::new(std::cell::RefCell::new(0));
 
         // for _ in 0..1_000 {
         //     *count.borrow_mut() += 1;
         //     let c = count.clone();
-        //     wvh.dispatch(move |_| {
+        //     whandle.dispatch(move |_| {
         //         *c.borrow_mut() += 1;
         //         Ok(())
         //     });
@@ -84,6 +84,20 @@ fn main() -> taco::Result<()> {
 
         // wvh.dispatch(move |_| {
         println!("count = {:?}", count);
+        //     Ok(())
+        // });
+
+        // moveを強制された安全な参照（ムーブ）
+        let y = 8181;
+        whandle.dispatch(move |_| {
+            println!("y = {}", y);
+            Ok(())
+        });
+
+        // // 'staticが無いと防げない危険な参照
+        // let y = 8181;
+        // whandle.dispatch(|_| {
+        //     println!("y = {}", y);
         //     Ok(())
         // });
     });

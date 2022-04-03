@@ -95,7 +95,7 @@ pub fn dispatch_unsafe<T>(hwnd: HWND, f: impl FnOnce(&T) -> Result<()>) {
 }
 
 impl<T> WindowHandle<T> {
-    pub fn dispatch(&self, f: impl FnOnce(&T) -> Result<()>) {
+    pub fn dispatch(&self, f: impl FnOnce(&T) -> Result<()> + Send + 'static) {
         dispatch_unsafe(self.hwnd, f)
     }
 }
