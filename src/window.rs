@@ -21,12 +21,14 @@ pub struct WindowRunner<T> {
     luggage_type: PhantomData<fn() -> T>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowHandle<T> {
     pub hwnd: HWND,
     pub hinstance: HINSTANCE,
     luggage_type: PhantomData<fn() -> T>,
 }
+
+impl<T: Clone> Copy for WindowHandle<T> {}
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
