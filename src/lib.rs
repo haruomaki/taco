@@ -116,6 +116,10 @@ pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
     pub hwnd: HWND,
+    pub hwnd_widget0: HWND,
+    pub hwnd_widget1: HWND,
+    pub hwnd_widgethost: HWND,
+    pub hwnd_d3d: HWND,
     pub hinstance: HINSTANCE,
 }
 
@@ -234,10 +238,22 @@ impl<'a> WebViewBuilder<'a> {
             }
         }
 
-        let webview = WebView {
+        fn find_child(hwndparent: HWND, lpszclass: &str) -> HWND {
+            unsafe { FindWindowExA(hwndparent, None, lpszclass, None) }
+        }
+        let hwnd_widget0 = find_child(hwnd, "Chrome_WidgetWin_0");
+        let hwnd_widget1 = find_child(hwnd_widget0, "Chrome_WidgetWin_1");
+        let hwnd_widgethost = find_child(hwnd_widget1, "Chrome_RenderWidgetHostHWND");
+        // let hwnd_d3d = find_child(hwnd_widget1, "Intermediate D3D Window");  doesn't work
+
+        let mut webview = WebView {
             controller,
             core,
             hwnd,
+            hwnd_widget0,
+            hwnd_widget1,
+            hwnd_widgethost,
+            hwnd_d3d: HWND(0),
             hinstance,
         };
 
@@ -330,6 +346,9 @@ impl<'a> WebViewBuilder<'a> {
         if !self.url.is_empty() {
             webview.navigate(self.url)?.set_visible(true)?;
         }
+
+        // Here because it needs a delay of about 150 ms or more.
+        webview.hwnd_d3d = find_child(hwnd_widget1, "Intermediate D3D Window");
 
         Ok((webview, wrun, whandle))
     }
