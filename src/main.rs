@@ -28,10 +28,11 @@ fn main() -> taco::Result<()> {
     let c = counter.clone();
     let (webview, mut wrun, whandle) = taco::WebViewBuilder {
         title: "たいとるです",
-        url: "C:\\Users\\haruo\\projects\\taco\\web\\main.html",
         ..Default::default()
     }
-    .bind("hostCallback", move |_, request| {
+    .build()?;
+
+    webview.bind("hostCallback", move |request| {
         if let [Value::String(str), Value::Number(a), Value::Number(b)] = &request[..] {
             if str == "Add" {
                 let result = a.as_f64().unwrap_or(0f64) + b.as_f64().unwrap_or(0f64);
@@ -42,8 +43,9 @@ fn main() -> taco::Result<()> {
             }
         }
         Err(r#"Usage: window.hostCallback("Add", a, b)"#.into())
-    })
-    .bind("charge", move |_, request| {
+    });
+
+    webview.bind("charge", move |request| {
         if let [Value::Number(x)] = &request[..] {
             let mut lock = c.lock().unwrap();
             (*lock) += x.as_i64().unwrap();
@@ -52,8 +54,13 @@ fn main() -> taco::Result<()> {
         }
 
         Err(r#"Usage: window.charge(x)"#.into())
-    })
-    .build()?;
+    });
+
+    // NOTE: Navigate and show manually after calling "bind".
+    // This makes the page visible with bindings already available.
+    webview
+        .navigate("C:\\Users\\haruo\\projects\\taco\\web\\main.html")?
+        .set_visible(true)?;
 
     spawn(move || {
         // // スレッドアンセーフな共有

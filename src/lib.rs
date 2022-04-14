@@ -5,7 +5,7 @@ pub extern crate windows;
 
 pub mod window;
 
-use std::{collections::HashMap, fmt, ptr, sync::mpsc};
+use std::{cell::RefCell, collections::HashMap, fmt, ptr, rc::Rc, sync::mpsc};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -72,7 +72,7 @@ impl<'a, T: 'a> From<std::sync::TryLockError<T>> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-type BindingCallback = Box<dyn FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String>>;
+type BindingCallback = Box<dyn FnMut(Vec<Value>) -> std::result::Result<Value, String>>;
 type BindingsMap = HashMap<String, BindingCallback>;
 
 pub struct WebViewBuilder<'a> {
@@ -88,7 +88,6 @@ pub struct WebViewBuilder<'a> {
     pub frameless: bool,
     pub resizable: bool,
     pub transparent: bool,
-    pub bindings: BindingsMap,
 }
 
 impl<'a> Default for WebViewBuilder<'a> {
@@ -106,15 +105,15 @@ impl<'a> Default for WebViewBuilder<'a> {
             frameless: false,
             resizable: true,
             transparent: false,
-            bindings: HashMap::new(),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WebView {
     pub controller: ICoreWebView2Controller,
     pub core: ICoreWebView2,
+    bindings: Rc<RefCell<BindingsMap>>,
     pub hwnd: HWND,
     pub hwnd_widget0: HWND,
     pub hwnd_widget1: HWND,
@@ -249,6 +248,7 @@ impl<'a> WebViewBuilder<'a> {
         let mut webview = WebView {
             controller,
             core,
+            bindings: Rc::new(RefCell::new(HashMap::new())),
             hwnd,
             hwnd_widget0,
             hwnd_widget1,
@@ -261,36 +261,8 @@ impl<'a> WebViewBuilder<'a> {
         webview
             .init(r#"window.external = { invoke: s => window.chrome.webview.postMessage(s) };"#)?;
 
-        for name in self.bindings.keys() {
-            let js = String::from(
-                r#"
-            (function() {
-                var name = '"#,
-            ) + name
-                + r#"';
-                var RPC = window._rpc = (window._rpc || {nextSeq: 1});
-                window[name] = function() {
-                    var seq = RPC.nextSeq++;
-                    var promise = new Promise(function(resolve, reject) {
-                        RPC[seq] = {
-                            resolve: resolve,
-                            reject: reject,
-                        };
-                    });
-                    window.external.invoke({
-                        id: seq,
-                        method: name,
-                        params: Array.prototype.slice.call(arguments),
-                    });
-                    return promise;
-                }
-            })()"#;
-
-            webview.init(&js)?;
-        }
-
         unsafe {
-            let webview_clone = webview.clone();
+            let w = webview.clone();
             let mut _token = EventRegistrationToken::default();
             webview.core.WebMessageReceived(
                 WebMessageReceivedEventHandler::create(Box::new(
@@ -300,10 +272,11 @@ impl<'a> WebViewBuilder<'a> {
                             if args.WebMessageAsJson(&mut message).is_ok() {
                                 let message = take_pwstr(message);
                                 if let Ok(value) = serde_json::from_str::<InvokeMessage>(&message) {
-                                    if let Some(f) = self.bindings.get_mut(&value.method) {
-                                        let webview = &webview_clone;
+                                    let mut bindings = w.bindings.borrow_mut();
+                                    if let Some(f) = bindings.get_mut(&value.method) {
+                                        let webview = &w;
                                         window::dispatch_unsafe(hwnd, move |_: &T| {
-                                            match (*f)(webview, value.params) {
+                                            match f(value.params) {
                                                 Ok(result) => resolve(webview, value.id, 0, result),
                                                 Err(err) => resolve(
                                                     webview,
@@ -352,14 +325,6 @@ impl<'a> WebViewBuilder<'a> {
 
         Ok((webview, wrun, whandle))
     }
-
-    pub fn bind<F>(mut self, name: &str, f: F) -> Self
-    where
-        F: FnMut(&WebView, Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
-    {
-        self.bindings.insert(String::from(name), Box::new(f));
-        self
-    }
 }
 
 impl WebView {
@@ -374,6 +339,42 @@ impl WebView {
             Box::new(|error_code, _id| error_code),
         )?;
         Ok(self)
+    }
+
+    pub fn bind<F>(&self, name: impl AsRef<str>, f: F)
+    where
+        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
+    {
+        let name = name.as_ref();
+        self.bindings
+            .borrow_mut()
+            .insert(String::from(name), Box::new(f));
+
+        let js = String::from(
+            r#"
+            (function() {
+                var name = '"#,
+        ) + name
+            + r#"';
+                var RPC = window._rpc = (window._rpc || {nextSeq: 1});
+                window[name] = function() {
+                    var seq = RPC.nextSeq++;
+                    var promise = new Promise(function(resolve, reject) {
+                        RPC[seq] = {
+                            resolve: resolve,
+                            reject: reject,
+                        };
+                    });
+                    window.external.invoke({
+                        id: seq,
+                        method: name,
+                        params: Array.prototype.slice.call(arguments),
+                    });
+                    return promise;
+                }
+            })()"#;
+
+        self.init(&js).unwrap();
     }
 
     pub fn navigate(&self, url: &str) -> Result<&Self> {
