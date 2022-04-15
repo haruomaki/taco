@@ -10,7 +10,7 @@
     <!-- <script src='main.js'></script> -->
 </head>
 
-<body style="width: 300px; height: 400px; margin: 0px; padding: 8px; background-color: rgba(224, 161, 224, 0.5);">
+<body style="background-color: rgba(224, 161, 224, 0.5);">
     <h1>おいっす😜</h1>
 
     <p>そうだよ（便乗）</p>
@@ -34,7 +34,14 @@
         </script>
     </div>
 
-    <button onclick="adjustToContent(document.body.scrollWidth, document.body.scrollHeight)">resize</button>
+    <div>
+        <h3>ぴえん</h3>
+        <p id="pien">🥺</p>
+        <button onclick="document.getElementById('pien').innerHTML += '🥺'">→</button>
+        <button onclick="document.getElementById('pien').innerHTML += '<br>🥺'">↓</button>
+    </div>
+
+    <button onclick="_adjust()">resize</button>
 
 </body>
 

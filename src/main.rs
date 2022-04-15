@@ -28,6 +28,7 @@ fn main() -> taco::Result<()> {
     let c = counter.clone();
     let (webview, mut wrun, whandle) = taco::WebViewBuilder {
         title: "たいとるです",
+        autosize: true,
         ..Default::default()
     }
     .build()?;

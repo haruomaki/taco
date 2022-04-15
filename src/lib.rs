@@ -88,6 +88,7 @@ pub struct WebViewBuilder<'a> {
     pub frameless: bool,
     pub resizable: bool,
     pub transparent: bool,
+    pub autosize: bool,
 }
 
 impl<'a> Default for WebViewBuilder<'a> {
@@ -105,6 +106,7 @@ impl<'a> Default for WebViewBuilder<'a> {
             frameless: false,
             resizable: true,
             transparent: false,
+            autosize: false,
         }
     }
 }
@@ -214,16 +216,7 @@ impl<'a> WebViewBuilder<'a> {
                 .map_err(|_| Error::WebView2Error(webview2_com::Error::SendError))?
         }?;
 
-        let size = get_window_size(hwnd);
-        let mut client_rect = RECT::default();
         unsafe {
-            GetClientRect(hwnd, std::mem::transmute(&mut client_rect));
-            controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: size.cx,
-                bottom: size.cy,
-            })?;
             controller.SetIsVisible(true)?;
         }
 
@@ -297,20 +290,28 @@ impl<'a> WebViewBuilder<'a> {
             )?;
         }
 
-        let w = webview.clone();
-        wrun.add_event_listener(WM_SIZE, move |_, _| {
+        if self.autosize {
+            let w = webview.clone();
+            webview.bind_unsafe("_rpc_adjustWindowToContent", move |request| {
+                if let [width, height] = &request[..] {
+                    let width = width.as_f64().unwrap();
+                    let height = height.as_f64().unwrap();
+                    println!("width = {:?}, height = {:?}", width, height);
+                    adjust_to_content(&w, width as _, height as _);
+                }
+                Ok(Value::Null)
+            });
+
+            webview.init(include_str!("autosize.js")).unwrap();
+        } else {
+            let w = webview.clone();
+            wrun.add_event_listener(WM_SIZE, move |_, _| {
+                let size = get_window_size(hwnd);
+                w.set_webview_size(size.cx, size.cy);
+            });
             let size = get_window_size(hwnd);
-            unsafe {
-                w.controller
-                    .SetBounds(RECT {
-                        left: 0,
-                        top: 0,
-                        right: size.cx,
-                        bottom: size.cy,
-                    })
-                    .unwrap();
-            }
-        });
+            webview.set_webview_size(size.cx, size.cy);
+        }
 
         if self.transparent {
             webview.bg();
@@ -341,9 +342,9 @@ impl WebView {
         Ok(self)
     }
 
-    pub fn bind<F>(&self, name: impl AsRef<str>, f: F)
+    pub fn bind_unsafe<F>(&self, name: impl AsRef<str>, f: F)
     where
-        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
+        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + 'static,
     {
         let name = name.as_ref();
         self.bindings
@@ -375,6 +376,13 @@ impl WebView {
             })()"#;
 
         self.init(&js).unwrap();
+    }
+
+    pub fn bind<F>(&self, name: impl AsRef<str>, f: F)
+    where
+        F: FnMut(Vec<Value>) -> std::result::Result<Value, String> + Send + 'static,
+    {
+        self.bind_unsafe(name, f);
     }
 
     pub fn navigate(&self, url: &str) -> Result<&Self> {
@@ -468,6 +476,19 @@ impl WebView {
         }
         Ok(self)
     }
+
+    pub fn set_webview_size(&self, width: i32, height: i32) {
+        unsafe {
+            self.controller
+                .SetBounds(RECT {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: height,
+                })
+                .unwrap();
+        }
+    }
 }
 
 fn get_window_size(hwnd: HWND) -> SIZE {
@@ -520,23 +541,19 @@ pub fn resolve(webview: &WebView, id: u64, status: i32, result: Value) -> Result
     Ok(())
 }
 
-pub fn adjust_to_content(hwnd: HWND, body_scroll_width: i32, body_scroll_height: i32) {
-    // println!(
-    //     "adjust_to_contentが呼ばれたよ！ {:?} {:?}",
-    //     body_scroll_width, body_scroll_height
-    // );
-
+pub fn adjust_to_content(webview: &WebView, offset_width: i32, offset_height: i32) {
     unsafe {
         SetWindowPos(
-            hwnd,
+            webview.hwnd,
             None,
             0,
             0,
-            body_scroll_width * 2 + 26,  // dpiとクライアント領域の補正
-            body_scroll_height * 2 + 71, // TODO: 補正を自動化
+            offset_width + 26,  // dpiとクライアント領域の補正
+            offset_height + 71, // TODO: 補正を自動化
             SWP_NOMOVE | SWP_NOZORDER,
         );
     }
+    webview.set_webview_size(offset_width, offset_height);
 }
 
 fn one_to_two(one: &ICoreWebView2Controller) -> &ICoreWebView2Controller2 {
