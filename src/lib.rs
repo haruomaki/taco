@@ -296,7 +296,7 @@ impl<'a> WebViewBuilder<'a> {
                 if let [width, height] = &request[..] {
                     let width = width.as_f64().unwrap();
                     let height = height.as_f64().unwrap();
-                    println!("width = {:?}, height = {:?}", width, height);
+                    // println!("width = {:?}, height = {:?}", width, height);
                     adjust_to_content(&w, width as _, height as _);
                 }
                 Ok(Value::Null)
@@ -541,19 +541,34 @@ pub fn resolve(webview: &WebView, id: u64, status: i32, result: Value) -> Result
     Ok(())
 }
 
-pub fn adjust_to_content(webview: &WebView, offset_width: i32, offset_height: i32) {
+pub fn adjust_to_content(webview: &WebView, offset_width: f64, offset_height: f64) {
+    let mut window = RECT::default();
+    let mut client = RECT::default();
+
+    unsafe {
+        GetWindowRect(webview.hwnd, &mut window);
+        GetClientRect(webview.hwnd, &mut client);
+    }
+
+    let non_client_width = (window.right - window.left) - (client.right - client.left);
+    let non_client_height = (window.bottom - window.top) - (client.bottom - client.top);
+
+    let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(webview.hwnd) };
+    let ratio = dpi as f64 / 96.;
+    let width = (offset_width * ratio) as i32;
+    let height = (offset_height * ratio) as i32;
     unsafe {
         SetWindowPos(
             webview.hwnd,
             None,
             0,
             0,
-            offset_width + 26,  // dpiとクライアント領域の補正
-            offset_height + 71, // TODO: 補正を自動化
+            width + non_client_width,
+            height + non_client_height,
             SWP_NOMOVE | SWP_NOZORDER,
         );
     }
-    webview.set_webview_size(offset_width, offset_height);
+    webview.set_webview_size(width, height);
 }
 
 fn one_to_two(one: &ICoreWebView2Controller) -> &ICoreWebView2Controller2 {
