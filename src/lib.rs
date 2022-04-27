@@ -13,6 +13,7 @@ use windows::{
     core::*,
     Win32::{
         Foundation::{E_POINTER, HINSTANCE, HWND, PWSTR, RECT, SIZE},
+        // Graphics::Gdi,
         System::WinRT::EventRegistrationToken,
         UI::WindowsAndMessaging::*,
     },
@@ -441,6 +442,21 @@ impl WebView {
             t.DefaultBackgroundColor(&mut backgroundcolor).unwrap();
         }
         println!("{:?}", backgroundcolor);
+
+        unsafe {
+            SetLayeredWindowAttributes(self.hwnd, 0x0000FF00, 50, LWA_COLORKEY);
+            // SetLayeredWindowAttributes(self.hwnd, 0x0000FF00, 100, LWA_ALPHA);
+
+            //     let hrgndst = Gdi::CreateEllipticRgn(0, 0, 500, 400);
+
+            //     let hrgn = Gdi::CreateRectRgn(-100, -100, 900, 100);
+            //     Gdi::CombineRgn(hrgndst, hrgndst, hrgn, Gdi::RGN_OR);
+
+            //     Gdi::SetWindowRgn(self.hwnd, hrgndst, true);
+
+            // Gdi::InvalidateRect(self.hwnd, null(), true).ok().unwrap();
+            // Gdi::UpdateWindow(self.hwnd).ok().unwrap();
+        }
     }
 
     pub fn set_position(&self, x: i32, y: i32) -> Result<&Self> {
