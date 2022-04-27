@@ -12,7 +12,10 @@ function _adjust() {
     // const height = document.documentElement.scrollHeight;
 
     // const width = document.documentElement.offsetWidth;
-    const height = document.documentElement.offsetHeight;
+    // const height = document.documentElement.offsetHeight;
+
+    // const width = ml + document.body.getBoundingClientRect().width + mr;
+    const height = document.documentElement.getBoundingClientRect().height;
 
     _rpc_adjustWindowToContent(width, height);
 }
